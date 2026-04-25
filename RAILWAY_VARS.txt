@@ -1,0 +1,23 @@
+Paste into Railway → Morgan Futures service → Variables (names exact).
+
+SIGNAL_EMAIL_TO=daniel4chigs@gmail.com
+SIGNAL_SMS_TO=+14699542425
+
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=<your gmail or smtp user>
+SMTP_PASS=<app password or smtp secret>
+SMTP_FROM=<same as SMTP_USER usually>
+SMTP_TLS=1
+
+TWILIO_ACCOUNT_SID=<optional>
+TWILIO_AUTH_TOKEN=<optional>
+TWILIO_FROM=<optional E.164 Twilio number>
+
+SIGNALS_ENABLED=1
+SCAN_INTERVAL_SEC=60
+SIGNAL_STALE_WINDOW_SEC=300
+SIGNAL_RR_DEFAULT=1.0
+
+# Optional: comma-separated Yahoo tickers
+# BOT_SYMBOLS=ES=F,MNQ=F,GC=F
