@@ -2,6 +2,12 @@ __pycache__/
 *.pyc
 .env
 .venv/
+.python-version
+.DS_Store
+__pycache__/
+*.pyc
+.env
+.venv/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
