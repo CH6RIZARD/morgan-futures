@@ -130,6 +130,22 @@ a{color:inherit;text-decoration:none}
 .left{display:flex;flex-direction:column;gap:1px;background:var(--border)}
 .panel{background:var(--bg);padding:16px 20px}
 
+/* ── PAPER FULLSCREEN MODE ── */
+body.paper-mode{overflow:hidden}
+body.paper-mode .sbar,
+body.paper-mode .metrics,
+body.paper-mode .chart-area,
+body.paper-mode .prog-section{display:none}
+body.paper-mode .main{grid-template-columns:1fr}
+body.paper-mode .right{display:none}
+body.paper-mode .left{min-height:calc(100vh - 54px);height:calc(100vh - 54px)}
+body.paper-mode #panel-rankings{display:none!important}
+body.paper-mode #panel-paper{display:block!important;flex:1;min-height:calc(100vh - 86px)}
+body.paper-mode #panel-paper .paper-grid{grid-template-columns:1.15fr .85fr}
+@media(max-width:980px){
+  body.paper-mode #panel-paper .paper-grid{grid-template-columns:1fr}
+}
+
 /* ── SECTION HEADER ── */
 .phdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
 .ptitle{font-size:12px;font-weight:500;color:var(--text)}
@@ -624,45 +640,58 @@ td{font-size:11px;padding:9px 0;border-bottom:1px solid #1a1232;color:#cbbff0;ve
       <div class="ptitle">Paper Trading</div>
       <div class="pbadge">Simulated</div>
     </div>
-    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">
+      <div style="background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px">
+        <div class="mlabel">Balance</div>
+        <div class="mval" id="paper-balance">$—</div>
+        <div class="msub" id="paper-balance-sub">Daily start: —</div>
+      </div>
       <div style="background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px">
         <div class="mlabel">Unrealized P&amp;L</div>
-        <div class="mval green" id="paper-upnl">$0.00</div>
-        <div class="msub">Live updates coming next</div>
+        <div class="mval" id="paper-upnl">$—</div>
+        <div class="msub">Across open positions</div>
+      </div>
+      <div style="background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px">
+        <div class="mlabel">Daily P&amp;L</div>
+        <div class="mval" id="paper-dpnl">$—</div>
+        <div class="msub">Since daily reset</div>
       </div>
       <div style="background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px">
         <div class="mlabel">Contracts</div>
         <div class="mval" id="paper-contracts">0</div>
-        <div class="msub">Across open positions</div>
-      </div>
-      <div style="background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px">
-        <div class="mlabel">Daily Drawdown</div>
-        <div class="mval red" id="paper-dd">$0.00</div>
-        <div class="msub">Prop-rule meter coming next</div>
+        <div class="msub">Open contracts</div>
       </div>
     </div>
-    <div style="margin-top:12px;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px">
-      <div class="mlabel" style="margin-bottom:10px">Simulated Order Entry</div>
-      <div style="display:grid;grid-template-columns:1.2fr .9fr .9fr .9fr auto;gap:8px;align-items:center">
-        <select id="paper-sym" style="background:var(--panel2);border:1px solid var(--border);color:var(--text);padding:10px 10px;border-radius:8px;font-family:inherit">
-          <option value="ES=F">ES</option>
-          <option value="MES=F">MES</option>
-          <option value="MNQ=F">MNQ</option>
-          <option value="MYM=F">MYM</option>
-          <option value="CL=F">CL</option>
-          <option value="GC=F">GC</option>
-          <option value="MGC=F">MGC</option>
-        </select>
-        <select id="paper-type" style="background:var(--panel2);border:1px solid var(--border);color:var(--text);padding:10px 10px;border-radius:8px;font-family:inherit">
-          <option value="market">Market</option>
-          <option value="limit">Limit</option>
-          <option value="stop">Stop</option>
-        </select>
-        <input id="paper-price" placeholder="Price" style="background:var(--panel2);border:1px solid var(--border);color:var(--text);padding:10px 10px;border-radius:8px;font-family:inherit">
-        <input id="paper-qty" placeholder="Qty" value="1" style="background:var(--panel2);border:1px solid var(--border);color:var(--text);padding:10px 10px;border-radius:8px;font-family:inherit">
-        <button onclick="paperStub()" style="background:rgba(210,180,140,.16);border:1px solid rgba(210,180,140,.28);color:var(--text);padding:10px 12px;border-radius:8px;font-size:11px;font-weight:700;font-family:inherit;cursor:pointer">Submit</button>
+
+    <div class="paper-grid" style="display:grid;grid-template-columns:1.15fr .85fr;gap:10px;margin-top:12px">
+      <div style="background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px">
+        <div class="mlabel" style="margin-bottom:10px">Order entry (market fill)</div>
+        <div style="display:grid;grid-template-columns:1.2fr .9fr .8fr .8fr;gap:8px;align-items:center">
+          <select id="paper-sym" style="background:var(--panel2);border:1px solid var(--border);color:var(--text);padding:10px 10px;border-radius:8px;font-family:inherit"></select>
+          <select id="paper-side" style="background:var(--panel2);border:1px solid var(--border);color:var(--text);padding:10px 10px;border-radius:8px;font-family:inherit">
+            <option value="BUY">Long (BUY)</option>
+            <option value="SELL">Short (SELL)</option>
+          </select>
+          <input id="paper-qty" placeholder="Qty" value="1" inputmode="numeric" style="background:var(--panel2);border:1px solid var(--border);color:var(--text);padding:10px 10px;border-radius:8px;font-family:inherit">
+          <button id="paper-submit" onclick="paperSubmit()" style="background:var(--green);border:none;color:#0a0320;padding:10px 12px;border-radius:8px;font-size:11px;font-weight:800;font-family:inherit;cursor:pointer">Place</button>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;align-items:center;margin-top:8px">
+          <input id="paper-sl" placeholder="Stop loss (price)" style="background:var(--panel2);border:1px solid var(--border);color:var(--text);padding:10px 10px;border-radius:8px;font-family:inherit">
+          <input id="paper-tp" placeholder="Take profit (price)" style="background:var(--panel2);border:1px solid var(--border);color:var(--text);padding:10px 10px;border-radius:8px;font-family:inherit">
+          <input id="paper-trail" placeholder="Trailing stop (ticks)" inputmode="numeric" style="background:var(--panel2);border:1px solid var(--border);color:var(--text);padding:10px 10px;border-radius:8px;font-family:inherit">
+        </div>
+        <div class="subhint" id="paper-hint" style="margin-top:10px">Orders fill at the current mark. SL/TP/trailing are managed automatically.</div>
       </div>
-      <div class="subhint" style="margin-top:10px">UI is wired for futures; next step is adding the paper-trade engine + tick-value P&amp;L.</div>
+
+      <div style="background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:10px">
+        <div class="mlabel">Open positions</div>
+        <div id="paper-positions" style="flex:1;min-height:120px"></div>
+      </div>
+    </div>
+
+    <div style="margin-top:12px;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px">
+      <div class="mlabel" style="margin-bottom:10px">Trade log (paper)</div>
+      <div id="paper-trades"></div>
     </div>
   </div>
 
@@ -1270,9 +1299,185 @@ function setMode(m){
   if (paper) paper.style.display = (__mode === 'paper') ? '' : 'none';
   if (tR) tR.className = 'mode-tab ' + (__mode === 'rank' ? 'on' : 'off');
   if (tP) tP.className = 'mode-tab ' + (__mode === 'paper' ? 'on' : 'off');
+  document.body.classList.toggle('paper-mode', __mode === 'paper');
+  if (__mode === 'paper') fetchPaperState();
 }
-function paperStub(){
-  alert('Paper trading engine not deployed yet — UI is ready. Next: simulated fills + tick-value P&L.');
+
+/* ── PAPER TRADING (REAL) ── */
+let __paper = null;
+function _fmtUsd(v){
+  const n = Number(v || 0);
+  const sign = n >= 0 ? '+' : '-';
+  const abs = Math.abs(n);
+  return `${sign}$${abs.toFixed(2)}`;
+}
+function _symBase(sym){
+  const s = String(sym||'');
+  return s.endsWith('=F') ? s.slice(0,-2) : s;
+}
+
+function renderPaper(p){
+  __paper = p || {};
+  const bal = Number(p?.balance || 0);
+  const d0 = Number(p?.daily_start_balance || bal);
+  const dpnl = Number(p?.daily_pnl ?? (bal - d0));
+  const positions = Array.isArray(p?.positions) ? p.positions : [];
+  const trades = Array.isArray(p?.trades) ? p.trades : [];
+
+  const upnl = positions.reduce((s,x)=>s + Number(x?.unrealized_pnl_usd||0), 0);
+  const contracts = positions.reduce((s,x)=>s + Number(x?.qty||0), 0);
+
+  const balEl = document.getElementById('paper-balance');
+  const balSub = document.getElementById('paper-balance-sub');
+  const upnlEl = document.getElementById('paper-upnl');
+  const dpnlEl = document.getElementById('paper-dpnl');
+  const cEl = document.getElementById('paper-contracts');
+  if (balEl) balEl.textContent = `$${bal.toFixed(2)}`;
+  if (balSub) balSub.textContent = `Daily start: $${d0.toFixed(2)}`;
+  if (upnlEl){
+    upnlEl.textContent = _fmtUsd(upnl);
+    upnlEl.className = 'mval ' + (upnl >= 0 ? 'green' : 'red');
+  }
+  if (dpnlEl){
+    dpnlEl.textContent = _fmtUsd(dpnl);
+    dpnlEl.className = 'mval ' + (dpnl >= 0 ? 'green' : 'red');
+  }
+  if (cEl) cEl.textContent = String(contracts);
+
+  const symSel = document.getElementById('paper-sym');
+  if (symSel && Array.isArray(p?.symbols) && !symSel.__filled){
+    symSel.innerHTML = p.symbols.map(s=>`<option value="${escHtml(String(s))}">${escHtml(_symBase(s))}</option>`).join('');
+    symSel.__filled = true;
+  }
+
+  const posWrap = document.getElementById('paper-positions');
+  if (posWrap){
+    if (!positions.length){
+      posWrap.innerHTML = `<div class="empty-state">No open positions.</div>`;
+    } else {
+      posWrap.innerHTML = positions.slice(0,50).map(pos=>{
+        const id = escHtml(String(pos.id||''));
+        const sym = escHtml(_symBase(pos.symbol));
+        const side = String(pos.side||'BUY').toUpperCase();
+        const qty = Number(pos.qty||0);
+        const entry = Number(pos.entry_price||0);
+        const mark = Number(pos.mark_price||0);
+        const sl = pos.stop_loss==null ? '—' : Number(pos.stop_loss).toLocaleString();
+        const tp = pos.take_profit==null ? '—' : Number(pos.take_profit).toLocaleString();
+        const trail = pos.trail_ticks==null ? '—' : `${Number(pos.trail_ticks)}t`;
+        const up = Number(pos.unrealized_pnl_usd||0);
+        const pnlCol = up >= 0 ? 'var(--green)' : '#e05555';
+        const dirBadge = side === 'BUY' ? 'bdge-buy' : 'bdge-sell';
+        return `
+          <div style="border:1px solid var(--border);border-radius:10px;background:rgba(0,0,0,.08);padding:10px 10px;margin-bottom:8px">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+              <div style="display:flex;align-items:center;gap:8px">
+                <span class="bdge ${dirBadge}">${side==='BUY'?'LONG':'SHORT'}</span>
+                <span style="font-weight:800;color:var(--text)">${sym}</span>
+                <span style="color:var(--muted2);font-size:10px">x${qty}</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:10px">
+                <span style="font-weight:800;color:${pnlCol}">${_fmtUsd(up)}</span>
+                <button onclick="paperClose('${id}')" style="background:transparent;border:1px solid rgba(224,112,112,.55);color:#e07070;padding:7px 10px;border-radius:8px;font-size:10px;font-weight:800;cursor:pointer">Close</button>
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-top:8px;font-size:10px;color:var(--muted2)">
+              <div><span style="color:var(--muted)">Entry</span><div style="color:#d9ccb8;font-weight:700">${entry.toLocaleString()}</div></div>
+              <div><span style="color:var(--muted)">Mark</span><div style="color:#d9ccb8;font-weight:700">${mark.toLocaleString()}</div></div>
+              <div><span style="color:var(--muted)">SL</span><div style="color:#d9ccb8;font-weight:700">${sl}</div></div>
+              <div><span style="color:var(--muted)">TP</span><div style="color:#d9ccb8;font-weight:700">${tp}</div></div>
+              <div><span style="color:var(--muted)">Trail</span><div style="color:#d9ccb8;font-weight:700">${trail}</div></div>
+              <div><span style="color:var(--muted)">ID</span><div style="color:#d9ccb8;font-weight:700">${id.slice(0,8)}</div></div>
+            </div>
+          </div>`;
+      }).join('');
+    }
+  }
+
+  const trWrap = document.getElementById('paper-trades');
+  if (trWrap){
+    if (!trades.length){
+      trWrap.innerHTML = `<div class="empty-state">No paper trades yet.</div>`;
+    } else {
+      const rows = trades.slice(0,30).map(t=>{
+        const sym = escHtml(_symBase(t.symbol));
+        const side = String(t.side||'BUY').toUpperCase();
+        const qty = Number(t.qty||0);
+        const entry = Number(t.entry_price||0);
+        const exitP = Number(t.exit_price||0);
+        const pnl = Number(t.realized_pnl_usd||0);
+        const pnlCol = pnl >= 0 ? 'var(--green)' : '#e05555';
+        const time = new Date(t.closed_at || t.opened_at || Date.now()).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+        return `<tr>
+          <td style="color:#ccc">${time}</td>
+          <td style="color:#ccc">${sym}</td>
+          <td><span class="bdge ${side==='BUY'?'bdge-buy':'bdge-sell'}">${side==='BUY'?'LONG':'SHORT'}</span></td>
+          <td style="color:var(--muted)">${qty}</td>
+          <td style="color:var(--muted)">${entry.toLocaleString()}</td>
+          <td style="color:var(--muted)">${exitP.toLocaleString()}</td>
+          <td style="color:${pnlCol};font-weight:700">${_fmtUsd(pnl)}</td>
+          <td style="color:var(--muted2)">${escHtml(String(t.exit_reason||'—'))}</td>
+        </tr>`;
+      }).join('');
+      trWrap.innerHTML = `<table><thead><tr>
+        <th>Time</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Exit</th><th>P&amp;L</th><th>Reason</th>
+      </tr></thead><tbody>${rows}</tbody></table>`;
+    }
+  }
+}
+
+async function fetchPaperState(){
+  try{
+    const r = await fetch(`${API}/api/paper/state`);
+    const data = await r.json();
+    renderPaper(data);
+  } catch(e) {}
+}
+
+async function paperSubmit(){
+  const btn = document.getElementById('paper-submit');
+  if (btn) btn.disabled = true;
+  try{
+    const sym = String(document.getElementById('paper-sym')?.value || '').trim();
+    const side = String(document.getElementById('paper-side')?.value || 'BUY').trim().toUpperCase();
+    const qty = parseInt(String(document.getElementById('paper-qty')?.value || '1').trim(), 10) || 1;
+    const sl = String(document.getElementById('paper-sl')?.value || '').trim();
+    const tp = String(document.getElementById('paper-tp')?.value || '').trim();
+    const trail = String(document.getElementById('paper-trail')?.value || '').trim();
+    const trailTicks = trail ? (parseInt(trail, 10) || 0) : 0;
+
+    const payload = {symbol:sym, side, qty};
+    if (sl) payload.stop_loss = sl;
+    if (tp) payload.take_profit = tp;
+    if (trailTicks > 0) payload.trail_ticks = trailTicks;
+
+    const r = await fetch(`${API}/api/paper/order`, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(payload),
+    });
+    if (!r.ok){
+      const j = await r.json().catch(()=>({}));
+      setUiStatus(false, `paper order failed: ${j?.error || r.status}`);
+      return;
+    }
+    setUiStatus(true);
+    await fetchPaperState();
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function paperClose(id){
+  try{
+    const r = await fetch(`${API}/api/paper/close`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({id})});
+    if (!r.ok){
+      const j = await r.json().catch(()=>({}));
+      setUiStatus(false, `paper close failed: ${j?.error || r.status}`);
+      return;
+    }
+    await fetchPaperState();
+  } catch(e) {}
 }
 
 const TRADEABLE_TIERS = new Set(['BASE','ELITE','SUPER']);
@@ -1952,8 +2157,10 @@ initChartHover();
 fetchState();
 fetchRankings();
 loadContact();
+fetchPaperState();
 setInterval(fetchState, 5000);
 setInterval(fetchRankings, 30000);
+setInterval(()=>{ if (__mode === 'paper') fetchPaperState(); }, 2000);
 </script>
 </body>
 </html>

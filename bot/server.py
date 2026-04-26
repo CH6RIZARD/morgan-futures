@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request, send_from_directory
+import requests
 
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 load_dotenv(os.path.join(_REPO_ROOT, ".env"))
@@ -91,7 +92,7 @@ CONTRACT_SPECS: dict[str, dict] = {
     "HG=F": {"tick_size": 0.0005, "tick_value": 12.50},
 }
 
-_paper_lock = threading.Lock()
+_paper_lock = threading.RLock()
 _paper: dict = {
     "enabled": True,
     "starting_balance": float(os.environ.get("PAPER_START_BALANCE", "50000")),
@@ -118,14 +119,75 @@ def _now_day_id_et() -> int:
     return n.year * 10000 + n.month * 100 + n.day
 
 
-def _mark_price(symbol: str) -> float | None:
+_mark_cache_lock = threading.Lock()
+_mark_cache: dict[str, dict] = {}
+
+
+def _mark_price_quick(symbol: str) -> float | None:
+    """
+    Fast mark price fetch via Yahoo chart endpoint.
+
+    We avoid calling yfinance from request handlers because it can stall
+    for 20-60s due to rate limiting / HTML responses.
+    """
+    sym = str(symbol or "").strip()
+    if not sym:
+        return None
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}"
+    params = {"range": "1d", "interval": f"{int(OHLC_INTERVAL_MINUTES)}m", "includePrePost": "false"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "application/json,text/plain,*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
     try:
-        candles = fetch_candles_live(symbol, interval=OHLC_INTERVAL_MINUTES, limit=3) or []
-        if not candles:
+        r = requests.get(url, params=params, headers=headers, timeout=8)
+        if r.status_code != 200:
             return None
-        return float(candles[-1]["close"])
+        data = r.json()
+        res = (((data or {}).get("chart") or {}).get("result") or [None])[0] or {}
+        q = (((res.get("indicators") or {}).get("quote") or [None])[0]) or {}
+        closes = q.get("close") or []
+        # pick last non-null close
+        for v in reversed(closes):
+            if v is None:
+                continue
+            return float(v)
+        return None
     except Exception:
         return None
+
+
+def _mark_price(symbol: str) -> float | None:
+    sym = str(symbol or "").strip()
+    if not sym:
+        return None
+    now = time.time()
+    with _mark_cache_lock:
+        cached = _mark_cache.get(sym) or {}
+        ts = float(cached.get("ts") or 0.0)
+        px = cached.get("px")
+        if px is not None and (now - ts) < float(os.environ.get("MARK_CACHE_TTL_SEC", "3.0")):
+            try:
+                return float(px)
+            except Exception:
+                pass
+
+    px = _mark_price_quick(sym)
+    if px is None:
+        # last resort (slower): existing live candles helper
+        try:
+            candles = fetch_candles_live(sym, interval=OHLC_INTERVAL_MINUTES, limit=3) or []
+            if candles:
+                px = float(candles[-1]["close"])
+        except Exception:
+            px = None
+    if px is None:
+        return None
+    with _mark_cache_lock:
+        _mark_cache[sym] = {"ts": now, "px": float(px)}
+    return float(px)
 
 
 def _spec(symbol: str) -> dict:
@@ -974,4 +1036,5 @@ def paper_close():
 
 if __name__ == "__main__":
     start_background_tasks()
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "5000")), debug=False)
+    # Threaded dev server so background ranker/paper loops don't starve HTTP handlers.
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "5000")), debug=False, threaded=True)
