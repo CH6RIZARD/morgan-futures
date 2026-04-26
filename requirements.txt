@@ -1,8 +1,8 @@
 flask==3.0.3
 gunicorn==22.0.0
-requests==2.32.3
 python-dotenv==1.0.1
-tzdata>=2024.1
+requests==2.32.3
 yfinance==0.2.48
 pandas==2.2.2
+tzdata>=2024.1
 numpy==2.0.2

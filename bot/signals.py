@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 import yfinance as yf
 import pandas as pd
+import requests
 
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 load_dotenv(os.path.join(_REPO_ROOT, ".env"))
@@ -91,19 +92,101 @@ def fetch_ohlc_interval(symbol, interval=OHLC_INTERVAL_MINUTES, retries=3):
 
     Returns (candles, coverage_days, has_gaps). Best-effort gap detection.
     '''
+    def _yahoo_chart(period: str) -> pd.DataFrame | None:
+        """
+        Fetch intraday OHLC via Yahoo's public chart endpoint.
+
+        This avoids some common `yfinance` JSON decode failures (rate-limit / HTML responses).
+        """
+        sym = str(symbol)
+        intv = f"{int(interval)}m"
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}"
+        params = {
+            "range": period,
+            "interval": intv,
+            "includePrePost": "false",
+            "events": "div|split|earn",
+        }
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Accept": "application/json,text/plain,*/*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Connection": "keep-alive",
+        }
+        r = requests.get(url, params=params, headers=headers, timeout=30)
+        if r.status_code != 200:
+            return None
+        try:
+            data = r.json()
+        except Exception:
+            return None
+
+        chart = (data or {}).get("chart") or {}
+        err = chart.get("error")
+        if err:
+            return None
+        res = (chart.get("result") or [None])[0] or {}
+        ts = res.get("timestamp") or []
+        ind = ((res.get("indicators") or {}).get("quote") or [None])[0] or {}
+        if not ts or not ind:
+            return None
+        opens = ind.get("open") or []
+        highs = ind.get("high") or []
+        lows = ind.get("low") or []
+        closes = ind.get("close") or []
+        vols = ind.get("volume") or []
+        rows = []
+        for i, t in enumerate(ts):
+            try:
+                o = float(opens[i])
+                hi = float(highs[i])
+                lo = float(lows[i])
+                cl = float(closes[i])
+                vol = float(vols[i]) if i < len(vols) and vols[i] is not None else 0.0
+            except Exception:
+                continue
+            rows.append((int(t), o, hi, lo, cl, vol))
+        if not rows:
+            return None
+
+        df = pd.DataFrame(rows, columns=["time", "Open", "High", "Low", "Close", "Volume"])
+        # `time` is epoch seconds already; we keep it but also create an index like yfinance would.
+        df["Datetime"] = pd.to_datetime(df["time"], unit="s", utc=True).dt.tz_convert(ET)
+        df = df.set_index("Datetime")
+        return df[["Open", "High", "Low", "Close", "Volume"]]
+
     last_err = None
     yf_interval = f"{int(interval)}m"
+    # yfinance allows limited intraday depth per interval (5m typically up to ~60d).
+    # Use a longer default window so backtests actually have enough bars.
+    yf_period = os.environ.get("YF_INTRADAY_PERIOD", "30d").strip() or "30d"
     for attempt in range(retries):
         try:
-            df = yf.download(
-                tickers=str(symbol),
-                period="7d",
-                interval=yf_interval,
-                progress=False,
-                auto_adjust=False,
-                prepost=False,
-                threads=False,
-            )
+            # 1) Prefer direct Yahoo chart API.
+            df = _yahoo_chart(yf_period)
+            if df is None or getattr(df, "empty", False):
+                # 2) Fall back to yfinance.
+                df = yf.download(
+                    tickers=str(symbol),
+                    period=yf_period,
+                    interval=yf_interval,
+                    progress=False,
+                    auto_adjust=False,
+                    prepost=False,
+                    threads=False,
+                )
+            # Fallback path: sometimes `download` fails with transient JSON decode errors.
+            if df is None or getattr(df, "empty", False):
+                try:
+                    df = yf.Ticker(str(symbol)).history(
+                        period=yf_period,
+                        interval=yf_interval,
+                        auto_adjust=False,
+                        prepost=False,
+                    )
+                except Exception:
+                    pass
             if df is None or df.empty:
                 return [], 0, True
 
@@ -113,8 +196,12 @@ def fetch_ohlc_interval(symbol, interval=OHLC_INTERVAL_MINUTES, retries=3):
             for ts, row in df.iterrows():
                 try:
                     dt = ts.to_pydatetime()
+                    # yfinance often returns tz-naive timestamps that are *already*
+                    # in the market's local timezone. Treating them as UTC shifts
+                    # sessions (Asia/London/NY windows) and produces 0 signals.
+                    # For our futures session logic we standardize to NY time.
                     if dt.tzinfo is None:
-                        dt = dt.replace(tzinfo=timezone.utc)
+                        dt = dt.replace(tzinfo=ET)
                     dt_et = dt.astimezone(ET)
                     t0 = int(dt_et.timestamp())
                     o = _yf_float(row, "Open")
@@ -150,7 +237,8 @@ def fetch_ohlc_interval(symbol, interval=OHLC_INTERVAL_MINUTES, retries=3):
             return out, round(coverage_days, 1), has_gaps
         except Exception as e:
             last_err = str(e)
-            time.sleep(0.8 * (attempt + 1))
+            # Yahoo will occasionally rate-limit/captcha. Back off harder.
+            time.sleep(1.5 * (attempt + 1))
 
     print(f"Fetch error {symbol} [{interval}m] after {retries} tries: {last_err}")
     return [], 0, True
@@ -185,8 +273,9 @@ def fetch_daily_ohlc(symbol, retries=3):
         for ts, row in df.iterrows():
             try:
                 dt = ts.to_pydatetime()
+                # Same tz-naive handling as intraday: prefer NY time for consistency.
                 if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
+                    dt = dt.replace(tzinfo=ET)
                 dt_et = dt.astimezone(ET)
                 t0 = int(dt_et.timestamp())
                 o = _yf_float(row, "Open")

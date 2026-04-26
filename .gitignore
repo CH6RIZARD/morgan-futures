@@ -4,11 +4,7 @@ __pycache__/
 .venv/
 .python-version
 .DS_Store
-__pycache__/
-*.pyc
-.env
-.venv/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-.DS_Store
+data/

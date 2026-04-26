@@ -16,6 +16,7 @@ from .notify import send_email, send_twilio_sms
 from .signals import (
     SYMBOLS,
     OHLC_INTERVAL_MINUTES,
+    backtest_symbol,
     fetch_candles_live,
     detect_kz_signals,
     detect_orb_signals,
@@ -40,6 +41,14 @@ SIGNAL_RR_DEFAULT = float(os.environ.get("SIGNAL_RR_DEFAULT", "1.0"))
 
 DEFAULT_ENABLED = os.environ.get("SIGNALS_ENABLED", "1").strip().lower() in ("1", "true", "yes")
 
+# Ranker (backtests) - used by dashboard symbol rankings
+RANKER_ENABLED = os.environ.get("RANKER_ENABLED", "1").strip().lower() in ("1", "true", "yes")
+RANKER_INTERVAL_SEC = float(os.environ.get("RANKER_INTERVAL_SEC", "900"))  # 15 min
+BACKTEST_DAYS_BACK = int(os.environ.get("BACKTEST_DAYS_BACK", "183"))
+# Default low enough that intraday sources (e.g. Yahoo 5m) can qualify symbols
+# without requiring user-provided multi-month CSV history.
+BACKTEST_MIN_CANDLES = int(os.environ.get("BACKTEST_MIN_CANDLES", "300"))
+
 state: dict = {
     "signals_enabled": DEFAULT_ENABLED,
     "trading_enabled": DEFAULT_ENABLED,
@@ -52,6 +61,10 @@ state: dict = {
 }
 
 _fired: dict[str, float] = {}
+
+_rankings_lock = threading.Lock()
+_rankings: dict = {}
+_ranker_last_run_utc: str | None = None
 
 
 def log(message: str, level: str = "INFO") -> None:
@@ -160,6 +173,91 @@ def _placeholder_rankings() -> dict:
     return out
 
 
+def _ranker_log(message: str, level: str = "INFO") -> None:
+    state.setdefault("ranker_log", [])
+    state["ranker_log"].insert(
+        0,
+        {
+            "time": datetime.now(timezone.utc).isoformat(),
+            "message": str(message),
+            "decision": str(level),
+        },
+    )
+    state["ranker_log"] = state["ranker_log"][:300]
+    print(f"[RANKER:{level}] {message}")
+
+
+def _run_backtests_once() -> None:
+    global _rankings, _ranker_last_run_utc
+    started = time.time()
+    _ranker_log(
+        f"Backtests starting ({len(SYMBOLS)} symbols, min_candles={BACKTEST_MIN_CANDLES}, days_back={BACKTEST_DAYS_BACK})",
+        "SYSTEM",
+    )
+
+    results: dict = {}
+    ok = skipped = 0
+
+    for sym in SYMBOLS:
+        try:
+            r = backtest_symbol(
+                sym,
+                interval=OHLC_INTERVAL_MINUTES,
+                days_back=BACKTEST_DAYS_BACK,
+                rr_target_kz=1.0,
+                rr_target_orb=1.0,
+                rr_target_ashl=1.0,
+                rr_target_lrny=1.0,
+                min_candles=BACKTEST_MIN_CANDLES,
+            )
+            if isinstance(r, dict) and r.get("_skip"):
+                skipped += 1
+                _ranker_log(f"{sym}: SKIP — {r.get('detail')}", "IGNORED")
+                # still publish zeros so UI can show it but it will be "ignored"
+                results[sym] = {"KZ": _empty_leg(), "ORB": _empty_leg(), "ASHL": _empty_leg(), "LRNY": _empty_leg(), "score": 0.0}
+                continue
+
+            ok += 1
+            results[sym] = {
+                "KZ": r.get("KZ") or _empty_leg(),
+                "ORB": r.get("ORB") or _empty_leg(),
+                "ASHL": r.get("ASHL") or _empty_leg(),
+                "LRNY": r.get("LRNY") or _empty_leg(),
+                "score": float(r.get("score") or 0.0),
+            }
+            _ranker_log(
+                f"{sym}: KZ {results[sym]['KZ'].get('winrate',0)}%/{results[sym]['KZ'].get('expectancy',0)}R "
+                f"ORB {results[sym]['ORB'].get('winrate',0)}%/{results[sym]['ORB'].get('expectancy',0)}R "
+                f"ASHL {results[sym]['ASHL'].get('winrate',0)}%/{results[sym]['ASHL'].get('expectancy',0)}R "
+                f"LRNY {results[sym]['LRNY'].get('winrate',0)}%/{results[sym]['LRNY'].get('expectancy',0)}R",
+                "EXECUTED",
+            )
+        except Exception as e:
+            _ranker_log(f"{sym}: ERROR — {e}", "ERROR")
+            results[sym] = {"KZ": _empty_leg(), "ORB": _empty_leg(), "ASHL": _empty_leg(), "LRNY": _empty_leg(), "score": 0.0}
+
+    with _rankings_lock:
+        _rankings = results
+        _ranker_last_run_utc = datetime.now(timezone.utc).isoformat()
+
+    elapsed = time.time() - started
+    _ranker_log(f"Backtests done: ok={ok} skipped={skipped} in {elapsed:.1f}s", "SYSTEM")
+
+
+def ranker_loop() -> None:
+    state["ranker_status"] = "RUNNING" if RANKER_ENABLED else "DISABLED"
+    if not RANKER_ENABLED:
+        return
+    # run once quickly on boot
+    time.sleep(1.0)
+    while True:
+        try:
+            _run_backtests_once()
+        except Exception as e:
+            _ranker_log(f"Ranker loop error: {e}", "ERROR")
+        time.sleep(max(30.0, float(RANKER_INTERVAL_SEC)))
+
+
 def scanner_loop() -> None:
     while True:
         try:
@@ -252,8 +350,13 @@ def start_background_tasks() -> None:
         if _background_started:
             return
         threading.Thread(target=scanner_loop, daemon=True).start()
+        threading.Thread(target=ranker_loop, daemon=True).start()
         _background_started = True
         log("Signals scanner started.", "SYSTEM")
+        if RANKER_ENABLED:
+            _ranker_log("Ranker thread started.", "SYSTEM")
+        else:
+            _ranker_log("Ranker disabled (set RANKER_ENABLED=1 to enable).", "SYSTEM")
 
 
 @app.before_request
@@ -293,6 +396,17 @@ def get_state():
         "kraken_balance_error": None,
         "min_winrate": 0,
         "min_expectancy": 0,
+        # UI tiering thresholds (used in dashboard tierForLeg)
+        "watchlist_min_expectancy": float(os.environ.get("WATCHLIST_MIN_EXPECTANCY", "0.15")),
+        "base_min_expectancy": float(os.environ.get("BASE_MIN_EXPECTANCY", "0.20")),
+        "base_min_winrate": float(os.environ.get("BASE_MIN_WINRATE", "30")),
+        "base_min_trades": float(os.environ.get("BASE_MIN_TRADES", "20")),
+        "elite_min_expectancy": float(os.environ.get("ELITE_MIN_EXPECTANCY", "1.00")),
+        "elite_min_winrate": float(os.environ.get("ELITE_MIN_WINRATE", "30")),
+        "elite_min_trades": float(os.environ.get("ELITE_MIN_TRADES", "10")),
+        "super_min_expectancy": float(os.environ.get("SUPER_MIN_EXPECTANCY", "1.00")),
+        "super_min_winrate": float(os.environ.get("SUPER_MIN_WINRATE", "60")),
+        "super_min_trades": float(os.environ.get("SUPER_MIN_TRADES", "20")),
     }
 
     base = {
@@ -303,8 +417,8 @@ def get_state():
         "trades": [],
         "open_positions": [],
         "symbol_rankings": _placeholder_rankings(),
-        "ranker_log": [],
-        "ranker_status": "DISABLED",
+        "ranker_log": state.get("ranker_log", []),
+        "ranker_status": state.get("ranker_status", "DISABLED"),
         "session_stats": {
             "KZ": {"wins": 0, "losses": 0, "total": 0, "pnl_r": 0.0},
             "ORB": {"wins": 0, "losses": 0, "total": 0, "pnl_r": 0.0},
@@ -315,6 +429,10 @@ def get_state():
     }
 
     out = {**base, **state}
+    with _rankings_lock:
+        if _rankings:
+            out["symbol_rankings"] = _rankings
+            out["ranker_last_run_utc"] = _ranker_last_run_utc
     out["diagnostics"] = {**diag, **(out.get("diagnostics") or {})}
     out["last_updated"] = datetime.now(timezone.utc).isoformat()
     return jsonify(out)
@@ -322,6 +440,10 @@ def get_state():
 
 @app.route("/api/rankings")
 def rankings():
+    with _rankings_lock:
+        if _rankings:
+            return jsonify(_rankings)
+    # If ranker hasn't produced results yet, return placeholders for now.
     return jsonify(_placeholder_rankings())
 
 

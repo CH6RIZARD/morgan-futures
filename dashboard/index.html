@@ -8,11 +8,25 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Syne+Mono&family=Syne:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-:root{--bg:#0a0320;--panel:#120829;--panel2:#0f0725;--text:#f4f0ff;--muted:#3a3060;--muted2:#4a3f78;--border:#241848;--purple:#7c3aed;--gold:#d4a843;--green:#0da574;--red:#e05555;--shadow:rgba(0,0,0,.45);}
+:root{
+  /* “My Trading” / TradingView-esque: warm dark + subtle grid */
+  --bg:#2a2420;
+  --panel:#201b18;
+  --panel2:#1a1513;
+  --text:#eadfce;
+  --muted:#a79582;
+  --muted2:#8f806f;
+  --border:#3a312a;
+  --purple:#6b5a4e; /* legacy */
+  --gold:#d2b48c;   /* tan accent */
+  --green:#7ccaa3;
+  --red:#e07070;
+  --shadow:rgba(0,0,0,.55);
+}
 *{margin:0;padding:0;box-sizing:border-box}
 body{background:var(--bg);color:var(--text);font-family:Syne,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:12px;min-height:100vh}
 a{color:inherit;text-decoration:none}
-*:focus{outline:none;box-shadow:0 0 0 3px rgba(124, 58, 237, 0.5)}
+*:focus{outline:none;box-shadow:0 0 0 3px rgba(210, 180, 140, 0.35)}
 
 /* ── HEADER ── */
 .hdr{display:flex;align-items:center;justify-content:space-between;padding:14px 24px;background:var(--bg);border-bottom:1px solid var(--border)}
