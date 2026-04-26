@@ -457,7 +457,167 @@ def toggle():
 
 @app.route("/api/chat", methods=["POST"])
 def chat():
-    return jsonify({"response": "Assistant chat is disabled in Morgan Futures signal-only mode."})
+    data = request.get_json(force=True, silent=True) or {}
+    msg = str(data.get("message") or "").strip()
+
+    with _rankings_lock:
+        rankings_snapshot = dict(_rankings) if isinstance(_rankings, dict) else {}
+
+    def _fmt_leg(leg: dict) -> str:
+        if not isinstance(leg, dict):
+            return "—"
+        wr = leg.get("winrate", 0)
+        ex = leg.get("expectancy", 0)
+        rx = leg.get("recent_expectancy", ex)
+        t = leg.get("total", 0)
+        try:
+            return f"{wr}% · exp {float(ex):.2f}R (recent {float(rx):.2f}R) · {int(t)} trades"
+        except Exception:
+            return f"{wr}% · exp {ex}R · {t} trades"
+
+    def _best_symbol(rankings: dict) -> tuple[str | None, dict | None]:
+        best_sym = None
+        best_leg = None
+        best_score = None
+        for sym, r in (rankings or {}).items():
+            if not isinstance(r, dict):
+                continue
+            legs = []
+            for k in ("KZ", "ORB", "ASHL", "LRNY"):
+                leg = r.get(k)
+                if isinstance(leg, dict):
+                    legs.append((k, leg))
+            for k, leg in legs:
+                try:
+                    ex = float(leg.get("expectancy") or 0.0)
+                    rx = float(leg.get("recent_expectancy") or ex)
+                    t = int(leg.get("total") or 0)
+                except Exception:
+                    continue
+                score = (rx, ex, t)
+                if best_score is None or score > best_score:
+                    best_score = score
+                    best_sym = str(sym)
+                    best_leg = {"leg": k, **leg}
+        return best_sym, best_leg
+
+    def _symbol_row(sym: str, r: dict) -> str:
+        if not isinstance(r, dict):
+            return f"{sym}: —"
+        legs = []
+        for k in ("KZ", "ORB", "ASHL", "LRNY"):
+            if isinstance(r.get(k), dict):
+                legs.append(f"{k}({_fmt_leg(r.get(k))})")
+        return f"{sym}: " + (" | ".join(legs) if legs else "—")
+
+    # Safety: never claim we can open/close trades.
+    if not msg:
+        return jsonify(
+            {
+                "response": (
+                    "I can analyze the bot’s data (rankings/backtests, signals, logs, trades) and answer questions. "
+                    "I cannot open/close trades.\n\n"
+                    "Try: “why are symbols ignored?”, “top 5 symbols”, “ES stats”, “last ranker run”, “recent signals”."
+                )
+            }
+        )
+
+    q = msg.lower()
+
+    # Quick health / status
+    if any(x in q for x in ("status", "health", "running", "online")):
+        return jsonify(
+            {
+                "response": (
+                    f"Scanner: {state.get('scanner_status','—')}\n"
+                    f"Ranker: {state.get('ranker_status','—')}\n"
+                    f"Last scan: {state.get('last_scan') or '—'}\n"
+                    f"Backtests symbols: {len(rankings_snapshot) if rankings_snapshot else 0}/{len(SYMBOLS)}"
+                )
+            }
+        )
+
+    # Explain ignored / no trades
+    if "ignored" in q or "watchlist" in q or "not testing" in q or "0 backtest" in q:
+        min_c = int(os.environ.get("BACKTEST_MIN_CANDLES", "1500"))
+        days = int(os.environ.get("BACKTEST_DAYS_BACK", "183"))
+        yf_period = os.environ.get("YF_INTRADAY_PERIOD", "30d")
+        return jsonify(
+            {
+                "response": (
+                    "Most “ignored” here means the backtester has **0 usable backtest trades** (or the leg stats don’t meet your tiers), "
+                    "usually because the data fetch returned too few 5m candles.\n\n"
+                    f"Current settings: BACKTEST_MIN_CANDLES={min_c}, BACKTEST_DAYS_BACK={days}, YF_INTRADAY_PERIOD={yf_period}.\n"
+                    "If you want, tell me which symbol (e.g. ES, NQ, GC) and I’ll summarize its KZ/ORB/ASHL/LRNY legs."
+                )
+            }
+        )
+
+    # Top symbols
+    if "top" in q or "best" in q or "rank" in q:
+        if not rankings_snapshot:
+            return jsonify({"response": "No backtest rankings yet (ranker hasn’t produced data)."})
+        # pick by score field if present, else by best leg expectancy
+        items = []
+        for sym, r in rankings_snapshot.items():
+            if not isinstance(r, dict):
+                continue
+            try:
+                score = float(r.get("score") or 0.0)
+            except Exception:
+                score = 0.0
+            items.append((score, str(sym), r))
+        items.sort(reverse=True, key=lambda x: x[0])
+        out = []
+        for score, sym, r in items[:5]:
+            out.append(f"- {sym} (score {score:.2f})")
+        best_sym, best_leg = _best_symbol(rankings_snapshot)
+        best_line = ""
+        if best_sym and best_leg:
+            best_line = f"\n\nBest single leg: {best_sym} {best_leg.get('leg')} — {_fmt_leg(best_leg)}"
+        return jsonify({"response": "Top symbols:\n" + "\n".join(out) + best_line})
+
+    # Per-symbol query (match by base like "ES" for "ES=F")
+    bases = {s.replace("=F", ""): s for s in SYMBOLS}
+    hit = None
+    for base, full in bases.items():
+        if base.lower() in q:
+            hit = full
+            break
+    if hit and rankings_snapshot and hit in rankings_snapshot:
+        return jsonify({"response": _symbol_row(hit, rankings_snapshot.get(hit) or {})})
+
+    # Recent logs / signals
+    if "signal" in q:
+        rec = list(state.get("recent_signals") or [])[:5]
+        if not rec:
+            return jsonify({"response": "No recent signals recorded yet."})
+        lines = []
+        for s in rec:
+            lines.append(
+                f"- {s.get('time_et','—')} ET · {s.get('type','—')} {s.get('direction','—')} {s.get('symbol','—')} "
+                f"(entry {s.get('entry','—')}, SL {s.get('stop_loss','—')})"
+            )
+        return jsonify({"response": "Recent signals:\n" + "\n".join(lines)})
+
+    if "log" in q:
+        logs = list(state.get("ranker_log") or [])[:8]
+        if not logs:
+            return jsonify({"response": "No ranker log entries yet."})
+        lines = []
+        for l in logs:
+            lines.append(f"- {l.get('decision','—')}: {l.get('message','—')}")
+        return jsonify({"response": "Ranker log (latest):\n" + "\n".join(lines)})
+
+    # Default help
+    return jsonify(
+        {
+            "response": (
+                "Ask me about: top symbols, a symbol’s stats (ES/NQ/GC/CL/etc), ignored reasons, recent signals, ranker log, status. "
+                "I can only analyze; I can’t execute trades."
+            )
+        }
+    )
 
 
 @app.route("/api/test_notify", methods=["POST"])

@@ -256,52 +256,115 @@ def fetch_candles_paginated(symbol, interval=OHLC_INTERVAL_MINUTES, days_back=90
 
 def fetch_daily_ohlc(symbol, retries=3):
     """Daily bars used for higher-timeframe context."""
-    try:
-        df = yf.download(
-            tickers=str(symbol),
-            period="2y",
-            interval="1d",
-            progress=False,
-            auto_adjust=False,
-            prepost=False,
-            threads=False,
-        )
-        if df is None or df.empty:
-            return [], 0, True
-        df = _flatten_yf_columns(df)
-        out = []
-        for ts, row in df.iterrows():
+    def _yahoo_daily() -> pd.DataFrame | None:
+        sym = str(symbol)
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}"
+        params = {
+            "range": "2y",
+            "interval": "1d",
+            "includePrePost": "false",
+        }
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Accept": "application/json,text/plain,*/*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Connection": "keep-alive",
+        }
+        try:
+            r = requests.get(url, params=params, headers=headers, timeout=30)
+        except Exception:
+            return None
+        if r.status_code != 200:
+            return None
+        try:
+            data = r.json()
+        except Exception:
+            return None
+        chart = (data or {}).get("chart") or {}
+        if chart.get("error"):
+            return None
+        res = (chart.get("result") or [None])[0] or {}
+        ts = res.get("timestamp") or []
+        ind = ((res.get("indicators") or {}).get("quote") or [None])[0] or {}
+        if not ts or not ind:
+            return None
+        opens = ind.get("open") or []
+        highs = ind.get("high") or []
+        lows = ind.get("low") or []
+        closes = ind.get("close") or []
+        vols = ind.get("volume") or []
+        rows = []
+        for i, t in enumerate(ts):
             try:
-                dt = ts.to_pydatetime()
-                # Same tz-naive handling as intraday: prefer NY time for consistency.
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=ET)
-                dt_et = dt.astimezone(ET)
-                t0 = int(dt_et.timestamp())
-                o = _yf_float(row, "Open")
-                hi = _yf_float(row, "High")
-                lo = _yf_float(row, "Low")
-                cl = _yf_float(row, "Close")
-                vol = _yf_float(row, "Volume")
-                if not all(map(lambda x: x == x, (o, hi, lo, cl))):
-                    continue
-                out.append({
+                o = float(opens[i])
+                hi = float(highs[i])
+                lo = float(lows[i])
+                cl = float(closes[i])
+                vol = float(vols[i]) if i < len(vols) and vols[i] is not None else 0.0
+            except Exception:
+                continue
+            rows.append((int(t), o, hi, lo, cl, vol))
+        if not rows:
+            return None
+        df = pd.DataFrame(rows, columns=["time", "Open", "High", "Low", "Close", "Volume"])
+        df["Datetime"] = pd.to_datetime(df["time"], unit="s", utc=True).dt.tz_convert(ET)
+        df = df.set_index("Datetime")
+        return df[["Open", "High", "Low", "Close", "Volume"]]
+
+    df = _yahoo_daily()
+    if df is None or getattr(df, "empty", False):
+        # fallback (best-effort)
+        try:
+            df = yf.download(
+                tickers=str(symbol),
+                period="2y",
+                interval="1d",
+                progress=False,
+                auto_adjust=False,
+                prepost=False,
+                threads=False,
+            )
+        except Exception:
+            df = None
+
+    if df is None or getattr(df, "empty", False):
+        return [], 0, True
+
+    df = _flatten_yf_columns(df)
+    out = []
+    for ts, row in df.iterrows():
+        try:
+            dt = ts.to_pydatetime()
+            # Same tz-naive handling as intraday: prefer NY time for consistency.
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=ET)
+            dt_et = dt.astimezone(ET)
+            t0 = int(dt_et.timestamp())
+            o = _yf_float(row, "Open")
+            hi = _yf_float(row, "High")
+            lo = _yf_float(row, "Low")
+            cl = _yf_float(row, "Close")
+            vol = _yf_float(row, "Volume")
+            if not all(map(lambda x: x == x, (o, hi, lo, cl))):
+                continue
+            out.append(
+                {
                     "time": t0,
                     "open": o,
                     "high": hi,
                     "low": lo,
                     "close": cl,
                     "volume": vol if vol == vol else 0.0,
-                })
-            except Exception:
-                continue
-        out.sort(key=lambda x: x["time"])
-        if len(out) < 50:
-            return [], 0, True
-        oldest, newest = out[0]["time"], out[-1]["time"]
-        return out, round((newest - oldest) / 86400.0, 1), False
-    except Exception:
+                }
+            )
+        except Exception:
+            continue
+    out.sort(key=lambda x: x["time"])
+    if len(out) < 50:
         return [], 0, True
+    oldest, newest = out[0]["time"], out[-1]["time"]
+    return out, round((newest - oldest) / 86400.0, 1), False
 
 
 def compute_daily_context(daily_candles, lookback_days=180):
