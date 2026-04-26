@@ -44,7 +44,7 @@ DEFAULT_ENABLED = os.environ.get("SIGNALS_ENABLED", "1").strip().lower() in ("1"
 # Ranker (backtests) - used by dashboard symbol rankings
 RANKER_ENABLED = os.environ.get("RANKER_ENABLED", "1").strip().lower() in ("1", "true", "yes")
 RANKER_INTERVAL_SEC = float(os.environ.get("RANKER_INTERVAL_SEC", "900"))  # 15 min
-BACKTEST_DAYS_BACK = int(os.environ.get("BACKTEST_DAYS_BACK", "183"))
+BACKTEST_DAYS_BACK = int(os.environ.get("BACKTEST_DAYS_BACK", "30"))
 # Default low enough that intraday sources (e.g. Yahoo 5m) can qualify symbols
 # without requiring user-provided multi-month CSV history.
 BACKTEST_MIN_CANDLES = int(os.environ.get("BACKTEST_MIN_CANDLES", "300"))

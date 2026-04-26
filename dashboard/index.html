@@ -24,12 +24,47 @@
   --shadow:rgba(0,0,0,.55);
 }
 *{margin:0;padding:0;box-sizing:border-box}
-body{background:var(--bg);color:var(--text);font-family:Syne,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:12px;min-height:100vh}
+body{
+  background:
+    linear-gradient(rgba(0,0,0,.18), rgba(0,0,0,.18)),
+    radial-gradient(1200px 700px at 35% -10%, rgba(210,180,140,.12), transparent 55%),
+    radial-gradient(900px 600px at 85% 0%, rgba(124,202,163,.08), transparent 55%),
+    var(--bg);
+  color:var(--text);
+  font-family:Syne,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  font-size:12px;
+  min-height:100vh
+}
 a{color:inherit;text-decoration:none}
 *:focus{outline:none;box-shadow:0 0 0 3px rgba(210, 180, 140, 0.35)}
 
 /* ── HEADER ── */
-.hdr{display:flex;align-items:center;justify-content:space-between;padding:14px 24px;background:var(--bg);border-bottom:1px solid var(--border)}
+.hdr{
+  display:grid;
+  grid-template-columns:1fr auto 1fr;
+  align-items:center;
+  gap:12px;
+  padding:12px 20px;
+  background:linear-gradient(180deg, rgba(255,255,255,.03), transparent 70%), var(--bg);
+  border-bottom:1px solid var(--border)
+}
+.hleft{display:flex;align-items:center;gap:12px}
+.hcenter{display:flex;align-items:center;justify-content:center}
+.hright{display:flex;align-items:center;justify-content:flex-end;gap:10px}
+.brand-mark{
+  width:26px;height:26px;border-radius:7px;
+  background:linear-gradient(135deg, rgba(210,180,140,.30), rgba(124,202,163,.18));
+  border:1px solid rgba(210,180,140,.18);
+  box-shadow:0 10px 22px rgba(0,0,0,.25);
+  display:flex;align-items:center;justify-content:center;
+  color:var(--gold);
+  font-family:'Syne Mono', ui-monospace, monospace;
+  font-size:12px;
+  letter-spacing:.3px;
+}
+.mode-tabs{display:flex;gap:6px;background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:10px;padding:3px}
+.mode-tab{cursor:pointer;border:none;background:transparent;color:var(--muted);padding:6px 10px;border-radius:8px;font-size:11px;font-weight:700;font-family:inherit}
+.mode-tab.on{background:rgba(210,180,140,.16);color:var(--text);border:1px solid rgba(210,180,140,.22)}
 .htitle{font-size:15px;font-weight:500;color:var(--text)}
 .hsub{font-size:11px;color:var(--muted);margin-top:2px}
 .pill{display:flex;align-items:center;gap:6px;padding:5px 14px;border-radius:4px;font-size:11px;font-weight:500;cursor:pointer;border:1px solid;transition:opacity .15s}
@@ -338,7 +373,7 @@ td{font-size:11px;padding:9px 0;border-bottom:1px solid #1a1232;color:#cbbff0;ve
 
 @media(max-width:760px){
   body{font-size:13px}
-  .hdr{padding:10px 14px;flex-wrap:wrap;gap:8px}
+  .hdr{padding:10px 14px;gap:10px;grid-template-columns:1fr}
   .htitle{font-size:14px}
   .hsub{display:none}
   .sbar{padding:8px 14px;gap:10px;font-size:10px;line-height:1.5}
@@ -388,11 +423,20 @@ td{font-size:11px;padding:9px 0;border-bottom:1px solid #1a1232;color:#cbbff0;ve
 
 <!-- HEADER -->
 <div class="hdr">
-  <div>
-    <div class="htitle">Morgan Futures</div>
-    <div class="hsub">Performance metrics and trading history</div>
+  <div class="hleft">
+    <div class="brand-mark" title="Morgan Futures">MF</div>
+    <div>
+      <div class="htitle">Morgan Futures</div>
+      <div class="hsub">Signals, rankings, and paper trading</div>
+    </div>
   </div>
-  <div style="display:flex;align-items:center;gap:10px">
+  <div class="hcenter">
+    <div class="mode-tabs" role="tablist" aria-label="Mode">
+      <button class="mode-tab on" id="tab-rank" onclick="setMode('rank')">Rankings</button>
+      <button class="mode-tab off" id="tab-paper" onclick="setMode('paper')">Paper Trading</button>
+    </div>
+  </div>
+  <div class="hright">
     <span style="font-size:10px;color:var(--muted2)" id="last-update">—</span>
     <div class="pill active" id="toggle-btn" onclick="toggleBot()">
       <div class="dot"></div>
@@ -450,7 +494,7 @@ td{font-size:11px;padding:9px 0;border-bottom:1px solid #1a1232;color:#cbbff0;ve
     </div>
     <div class="chart-wrap" id="chart-wrap">
       <div class="chart-tip" id="chart-tip"></div>
-      <svg id="balance-svg" style="width:100%;height:90px" viewBox="0 0 640 90" preserveAspectRatio="none">
+      <svg id="balance-svg" style="width:100%;height:72px" viewBox="0 0 640 90" preserveAspectRatio="none">
         <defs>
           <linearGradient id="gf" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stop-color="var(--green)" stop-opacity=".12"/>
@@ -530,7 +574,7 @@ td{font-size:11px;padding:9px 0;border-bottom:1px solid #1a1232;color:#cbbff0;ve
   </div>
 
   <!-- SYMBOL RANKINGS -->
-  <div class="panel">
+  <div class="panel" id="panel-rankings">
     <div class="phdr">
       <div class="ptitle">Symbol Rankings</div>
       <div class="pbadge" id="ranking-count">0 symbols</div>
@@ -571,6 +615,54 @@ td{font-size:11px;padding:9px 0;border-bottom:1px solid #1a1232;color:#cbbff0;ve
           <span class="wr green" id="lrny-wr">—</span>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- PAPER TRADING -->
+  <div class="panel" id="panel-paper" style="display:none">
+    <div class="phdr">
+      <div class="ptitle">Paper Trading</div>
+      <div class="pbadge">Simulated</div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
+      <div style="background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px">
+        <div class="mlabel">Unrealized P&amp;L</div>
+        <div class="mval green" id="paper-upnl">$0.00</div>
+        <div class="msub">Live updates coming next</div>
+      </div>
+      <div style="background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px">
+        <div class="mlabel">Contracts</div>
+        <div class="mval" id="paper-contracts">0</div>
+        <div class="msub">Across open positions</div>
+      </div>
+      <div style="background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px">
+        <div class="mlabel">Daily Drawdown</div>
+        <div class="mval red" id="paper-dd">$0.00</div>
+        <div class="msub">Prop-rule meter coming next</div>
+      </div>
+    </div>
+    <div style="margin-top:12px;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px">
+      <div class="mlabel" style="margin-bottom:10px">Simulated Order Entry</div>
+      <div style="display:grid;grid-template-columns:1.2fr .9fr .9fr .9fr auto;gap:8px;align-items:center">
+        <select id="paper-sym" style="background:var(--panel2);border:1px solid var(--border);color:var(--text);padding:10px 10px;border-radius:8px;font-family:inherit">
+          <option value="ES=F">ES</option>
+          <option value="MES=F">MES</option>
+          <option value="MNQ=F">MNQ</option>
+          <option value="MYM=F">MYM</option>
+          <option value="CL=F">CL</option>
+          <option value="GC=F">GC</option>
+          <option value="MGC=F">MGC</option>
+        </select>
+        <select id="paper-type" style="background:var(--panel2);border:1px solid var(--border);color:var(--text);padding:10px 10px;border-radius:8px;font-family:inherit">
+          <option value="market">Market</option>
+          <option value="limit">Limit</option>
+          <option value="stop">Stop</option>
+        </select>
+        <input id="paper-price" placeholder="Price" style="background:var(--panel2);border:1px solid var(--border);color:var(--text);padding:10px 10px;border-radius:8px;font-family:inherit">
+        <input id="paper-qty" placeholder="Qty" value="1" style="background:var(--panel2);border:1px solid var(--border);color:var(--text);padding:10px 10px;border-radius:8px;font-family:inherit">
+        <button onclick="paperStub()" style="background:rgba(210,180,140,.16);border:1px solid rgba(210,180,140,.28);color:var(--text);padding:10px 12px;border-radius:8px;font-size:11px;font-weight:700;font-family:inherit;cursor:pointer">Submit</button>
+      </div>
+      <div class="subhint" style="margin-top:10px">UI is wired for futures; next step is adding the paper-trade engine + tick-value P&amp;L.</div>
     </div>
   </div>
 
@@ -1146,6 +1238,22 @@ function imgEl(sym, size=24){
 
 let __rankSymbols = [];
 let __ignoredSymbols = [];
+
+let __mode = 'rank';
+function setMode(m){
+  __mode = (m === 'paper') ? 'paper' : 'rank';
+  const rank = document.getElementById('panel-rankings');
+  const paper = document.getElementById('panel-paper');
+  const tR = document.getElementById('tab-rank');
+  const tP = document.getElementById('tab-paper');
+  if (rank) rank.style.display = (__mode === 'rank') ? '' : 'none';
+  if (paper) paper.style.display = (__mode === 'paper') ? '' : 'none';
+  if (tR) tR.className = 'mode-tab ' + (__mode === 'rank' ? 'on' : 'off');
+  if (tP) tP.className = 'mode-tab ' + (__mode === 'paper' ? 'on' : 'off');
+}
+function paperStub(){
+  alert('Paper trading engine not deployed yet — UI is ready. Next: simulated fills + tick-value P&L.');
+}
 
 const TRADEABLE_TIERS = new Set(['BASE','ELITE','SUPER']);
 function isTradeableSymbol(s) {
