@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import threading
 import time
+import uuid
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -13,6 +14,7 @@ _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 load_dotenv(os.path.join(_REPO_ROOT, ".env"))
 
 from .notify import send_email, send_twilio_sms
+from .contact_store import load_contact, save_contact
 from .signals import (
     SYMBOLS,
     OHLC_INTERVAL_MINUTES,
@@ -65,6 +67,188 @@ _fired: dict[str, float] = {}
 _rankings_lock = threading.Lock()
 _rankings: dict = {}
 _ranker_last_run_utc: str | None = None
+
+# =====================
+# PAPER TRADING (SIMULATED)
+# =====================
+
+CONTRACT_SPECS: dict[str, dict] = {
+    # Equity indices
+    "ES=F": {"tick_size": 0.25, "tick_value": 12.50},
+    "MES=F": {"tick_size": 0.25, "tick_value": 1.25},
+    "NQ=F": {"tick_size": 0.25, "tick_value": 5.00},
+    "MNQ=F": {"tick_size": 0.25, "tick_value": 0.50},
+    "RTY=F": {"tick_size": 0.10, "tick_value": 5.00},
+    "M2K=F": {"tick_size": 0.10, "tick_value": 0.50},
+    # Metals
+    "GC=F": {"tick_size": 0.10, "tick_value": 10.00},
+    "MGC=F": {"tick_size": 0.10, "tick_value": 1.00},
+    "SI=F": {"tick_size": 0.005, "tick_value": 25.00},
+    # Energy
+    "CL=F": {"tick_size": 0.01, "tick_value": 10.00},
+    "MCL=F": {"tick_size": 0.01, "tick_value": 1.00},
+    # Copper (approx; varies by venue)
+    "HG=F": {"tick_size": 0.0005, "tick_value": 12.50},
+}
+
+_paper_lock = threading.Lock()
+_paper: dict = {
+    "enabled": True,
+    "starting_balance": float(os.environ.get("PAPER_START_BALANCE", "50000")),
+    "balance": float(os.environ.get("PAPER_START_BALANCE", "50000")),
+    "daily_start_balance": float(os.environ.get("PAPER_START_BALANCE", "50000")),
+    "last_day_id_et": None,
+    "positions": [],
+    "trades": [],
+    "log": [],
+}
+
+
+def _paper_log(msg: str, level: str = "INFO") -> None:
+    with _paper_lock:
+        _paper["log"].insert(
+            0,
+            {"time": datetime.now(timezone.utc).isoformat(), "decision": level, "message": str(msg)},
+        )
+        _paper["log"] = _paper["log"][:400]
+
+
+def _now_day_id_et() -> int:
+    n = datetime.now(ET)
+    return n.year * 10000 + n.month * 100 + n.day
+
+
+def _mark_price(symbol: str) -> float | None:
+    try:
+        candles = fetch_candles_live(symbol, interval=OHLC_INTERVAL_MINUTES, limit=3) or []
+        if not candles:
+            return None
+        return float(candles[-1]["close"])
+    except Exception:
+        return None
+
+
+def _spec(symbol: str) -> dict:
+    return CONTRACT_SPECS.get(symbol, {"tick_size": 0.25, "tick_value": 1.0})
+
+
+def _pnl_usd(symbol: str, side: str, entry: float, mark: float, qty: int) -> float:
+    sp = _spec(symbol)
+    tick_size = float(sp.get("tick_size") or 0.25)
+    tick_value = float(sp.get("tick_value") or 1.0)
+    if tick_size <= 0:
+        tick_size = 0.25
+    ticks = (mark - entry) / tick_size
+    if str(side).upper() == "SELL":
+        ticks = -ticks
+    return float(ticks) * tick_value * int(qty)
+
+
+def _trail_stop(pos: dict, mark: float) -> None:
+    try:
+        trail_ticks = int(pos.get("trail_ticks") or 0)
+        if trail_ticks <= 0:
+            return
+        tick_size = float((_spec(pos["symbol"]).get("tick_size") or 0.25))
+        side = str(pos.get("side") or "BUY").upper()
+        if side == "BUY":
+            best = float(pos.get("best_mark") or mark)
+            best = max(best, mark)
+            pos["best_mark"] = best
+            new_sl = best - trail_ticks * tick_size
+            cur_sl = pos.get("stop_loss")
+            pos["stop_loss"] = round(new_sl, 6) if cur_sl is None else round(max(float(cur_sl), new_sl), 6)
+        else:
+            best = float(pos.get("best_mark") or mark)
+            best = min(best, mark)
+            pos["best_mark"] = best
+            new_sl = best + trail_ticks * tick_size
+            cur_sl = pos.get("stop_loss")
+            pos["stop_loss"] = round(new_sl, 6) if cur_sl is None else round(min(float(cur_sl), new_sl), 6)
+    except Exception:
+        return
+
+
+def _close_position_locked(pos_id: str, exit_price: float, reason: str = "MANUAL") -> dict | None:
+    positions = _paper.get("positions") or []
+    idx = next((i for i, p in enumerate(positions) if p.get("id") == pos_id), None)
+    if idx is None:
+        return None
+
+    pos = positions.pop(idx)
+    pos["status"] = "CLOSED"
+    pos["exit_price"] = float(exit_price)
+    pos["exit_reason"] = str(reason)
+    pos["closed_at"] = datetime.now(timezone.utc).isoformat()
+    pnl = _pnl_usd(pos["symbol"], pos["side"], float(pos["entry_price"]), float(exit_price), int(pos["qty"]))
+    pos["realized_pnl_usd"] = round(float(pnl), 2)
+    _paper["balance"] = round(float(_paper.get("balance") or 0.0) + float(pnl), 2)
+    _paper.setdefault("trades", []).insert(0, pos)
+    _paper["trades"] = _paper["trades"][:2000]
+    _paper_log(
+        f"CLOSED {pos['symbol']} {pos['side']} x{pos['qty']} @ {exit_price} ({reason}) pnl=${pos['realized_pnl_usd']}",
+        "EXECUTED",
+    )
+    return pos
+
+
+def _paper_tick() -> None:
+    day_id = _now_day_id_et()
+    with _paper_lock:
+        if _paper.get("last_day_id_et") != day_id:
+            _paper["last_day_id_et"] = day_id
+            _paper["daily_start_balance"] = float(_paper.get("balance") or 0.0)
+        positions = list(_paper.get("positions") or [])
+
+    for pos in positions:
+        sym = pos.get("symbol")
+        if not sym:
+            continue
+        mark = _mark_price(sym)
+        if mark is None:
+            continue
+
+        with _paper_lock:
+            cur = next((p for p in (_paper.get("positions") or []) if p.get("id") == pos.get("id")), None)
+            if cur is None:
+                continue
+
+            _trail_stop(cur, float(mark))
+            cur["mark_price"] = float(mark)
+            cur["unrealized_pnl_usd"] = round(
+                _pnl_usd(cur["symbol"], cur["side"], float(cur["entry_price"]), float(mark), int(cur["qty"])),
+                2,
+            )
+            cur["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+            sl = cur.get("stop_loss")
+            tp = cur.get("take_profit")
+            side = str(cur.get("side") or "BUY").upper()
+            hit = None
+            if side == "BUY":
+                if sl is not None and float(mark) <= float(sl):
+                    hit = ("STOP", float(sl))
+                elif tp is not None and float(mark) >= float(tp):
+                    hit = ("TP", float(tp))
+            else:
+                if sl is not None and float(mark) >= float(sl):
+                    hit = ("STOP", float(sl))
+                elif tp is not None and float(mark) <= float(tp):
+                    hit = ("TP", float(tp))
+
+            if hit:
+                reason, exit_price = hit
+                _close_position_locked(cur["id"], exit_price=exit_price, reason=reason)
+
+
+def paper_loop() -> None:
+    while True:
+        try:
+            if bool(_paper.get("enabled", True)):
+                _paper_tick()
+        except Exception as e:
+            _paper_log(f"paper loop error: {e}", "ERROR")
+        time.sleep(float(os.environ.get("PAPER_TICK_SEC", "2.0")))
 
 
 def log(message: str, level: str = "INFO") -> None:
@@ -132,6 +316,9 @@ def _format_sms(sig: dict) -> str:
 
 
 def _notify(sig: dict) -> None:
+    if not load_contact() and not os.environ.get("SIGNAL_EMAIL_TO", "").strip() and not os.environ.get("SIGNAL_SMS_TO", "").strip():
+        log("No contact configured; skipping notifications.", "IGNORED")
+        return
     subject, body = _format_email(sig)
     em_err = send_email(subject, body)
     if em_err:
@@ -351,6 +538,7 @@ def start_background_tasks() -> None:
             return
         threading.Thread(target=scanner_loop, daemon=True).start()
         threading.Thread(target=ranker_loop, daemon=True).start()
+        threading.Thread(target=paper_loop, daemon=True).start()
         _background_started = True
         log("Signals scanner started.", "SYSTEM")
         if RANKER_ENABLED:
@@ -637,6 +825,151 @@ def test_notify():
     }
     _notify(sig)
     return jsonify({"ok": True})
+
+
+def _is_valid_email(email: str) -> bool:
+    if not email or "@" not in email:
+        return False
+    local, _, domain = email.partition("@")
+    return bool(local.strip()) and "." in domain and " " not in email
+
+
+def _phone_to_e164(phone_raw: str) -> str | None:
+    if not phone_raw:
+        return None
+    s = "".join(ch for ch in str(phone_raw).strip() if ch.isdigit() or ch == "+")
+    if s.startswith("+"):
+        digits = "".join(ch for ch in s if ch.isdigit())
+        if len(digits) == 11 and digits.startswith("1"):
+            return f"+{digits}"
+        return None
+    digits = "".join(ch for ch in s if ch.isdigit())
+    if len(digits) == 10:
+        return f"+1{digits}"
+    if len(digits) == 11 and digits.startswith("1"):
+        return f"+{digits}"
+    return None
+
+
+@app.route("/api/contact", methods=["GET"])
+def get_contact():
+    c = load_contact()
+    if not c:
+        return jsonify({"email": "", "phone_e164": ""})
+    return jsonify({"email": c.email, "phone_e164": c.phone_e164})
+
+
+@app.route("/api/contact", methods=["POST"])
+def set_contact():
+    data = request.get_json(force=True, silent=True) or {}
+    email = str(data.get("email") or "").strip()
+    phone = str(data.get("phone") or "").strip()
+    if not _is_valid_email(email):
+        return jsonify({"ok": False, "error": "invalid_email"}), 400
+    e164 = _phone_to_e164(phone)
+    if not e164:
+        return jsonify({"ok": False, "error": "invalid_phone"}), 400
+    c = save_contact(email=email, phone_e164=e164)
+    return jsonify({"ok": True, "email": c.email, "phone_e164": c.phone_e164})
+
+
+@app.route("/api/paper/state")
+def paper_state():
+    with _paper_lock:
+        bal = float(_paper.get("balance") or 0.0)
+        d0 = float(_paper.get("daily_start_balance") or bal)
+        out = {
+            "enabled": bool(_paper.get("enabled", True)),
+            "balance": bal,
+            "daily_start_balance": d0,
+            "daily_pnl": round(bal - d0, 2),
+            "positions": list(_paper.get("positions") or []),
+            "trades": list(_paper.get("trades") or [])[:500],
+            "log": list(_paper.get("log") or [])[:200],
+            "contract_specs": CONTRACT_SPECS,
+            "symbols": list(SYMBOLS),
+        }
+    return jsonify(out)
+
+
+@app.route("/api/paper/order", methods=["POST"])
+def paper_order():
+    data = request.get_json(force=True, silent=True) or {}
+    sym = str(data.get("symbol") or "").strip()
+    side = str(data.get("side") or "BUY").strip().upper()
+    qty = int(data.get("qty") or 1)
+    sl = data.get("stop_loss")
+    tp = data.get("take_profit")
+    trail_ticks = int(data.get("trail_ticks") or 0)
+
+    if sym not in SYMBOLS:
+        return jsonify({"ok": False, "error": "unknown_symbol"}), 400
+    if side not in ("BUY", "SELL"):
+        return jsonify({"ok": False, "error": "bad_side"}), 400
+    qty = max(1, min(qty, 50))
+
+    mark = _mark_price(sym)
+    if mark is None:
+        return jsonify({"ok": False, "error": "no_market_data"}), 503
+
+    try:
+        sl_f = float(sl) if sl is not None and str(sl).strip() != "" else None
+    except Exception:
+        sl_f = None
+    try:
+        tp_f = float(tp) if tp is not None and str(tp).strip() != "" else None
+    except Exception:
+        tp_f = None
+
+    pos = {
+        "id": uuid.uuid4().hex,
+        "symbol": sym,
+        "side": side,
+        "qty": qty,
+        "entry_price": round(float(mark), 6),
+        "mark_price": round(float(mark), 6),
+        "stop_loss": round(sl_f, 6) if sl_f is not None else None,
+        "take_profit": round(tp_f, 6) if tp_f is not None else None,
+        "trail_ticks": trail_ticks if trail_ticks > 0 else None,
+        "best_mark": float(mark),
+        "status": "OPEN",
+        "opened_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "unrealized_pnl_usd": 0.0,
+        "contract": _spec(sym),
+    }
+
+    with _paper_lock:
+        _paper.setdefault("positions", []).insert(0, pos)
+        _paper["positions"] = _paper["positions"][:200]
+        _paper_log(
+            f"OPEN {sym} {side} x{qty} @ {pos['entry_price']} SL={pos.get('stop_loss')} TP={pos.get('take_profit')} trail={pos.get('trail_ticks')}",
+            "EXECUTED",
+        )
+
+    return jsonify({"ok": True, "position": pos})
+
+
+@app.route("/api/paper/close", methods=["POST"])
+def paper_close():
+    data = request.get_json(force=True, silent=True) or {}
+    pos_id = str(data.get("id") or "").strip()
+    if not pos_id:
+        return jsonify({"ok": False, "error": "missing_id"}), 400
+
+    with _paper_lock:
+        pos = next((p for p in (_paper.get("positions") or []) if p.get("id") == pos_id), None)
+        if not pos:
+            return jsonify({"ok": False, "error": "not_found"}), 404
+        sym = pos.get("symbol")
+
+    mark = _mark_price(sym) if sym else None
+    if mark is None:
+        mark = float(pos.get("mark_price") or pos.get("entry_price") or 0.0)
+
+    with _paper_lock:
+        closed = _close_position_locked(pos_id, exit_price=float(mark), reason="MANUAL")
+    return jsonify({"ok": True, "trade": closed})
 
 
 if __name__ == "__main__":

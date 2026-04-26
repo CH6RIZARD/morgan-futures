@@ -697,6 +697,26 @@ td{font-size:11px;padding:9px 0;border-bottom:1px solid #1a1232;color:#cbbff0;ve
     <div class="empty-state">Waiting for signals...</div>
   </div>
   <div class="chat-area">
+    <div class="chat-label">Signal Alerts</div>
+    <div style="display:flex;flex-direction:column;gap:8px">
+      <div>
+        <input id="c-email" placeholder="Email (for alerts)" style="width:100%;background:var(--border);border:1px solid #7a6ab0;color:var(--text);padding:8px 10px;font-size:11px;border-radius:3px;outline:none;font-family:inherit;transition:border-color .15s">
+        <div id="c-email-err" style="margin-top:5px;color:#e05555;font-size:10px;min-height:14px"></div>
+      </div>
+      <div>
+        <input id="c-phone" placeholder="Phone (for SMS)" style="width:100%;background:var(--border);border:1px solid #7a6ab0;color:var(--text);padding:8px 10px;font-size:11px;border-radius:3px;outline:none;font-family:inherit;transition:border-color .15s">
+        <div id="c-phone-err" style="margin-top:5px;color:#e05555;font-size:10px;min-height:14px"></div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button id="c-save" onclick="saveContact()" style="flex:1;background:var(--green);color:#0a0320;border:none;padding:8px 14px;font-size:10px;font-weight:700;border-radius:3px;cursor:pointer;font-family:inherit;transition:opacity .15s">Save alerts</button>
+        <span id="c-saved" style="font-size:10px;color:var(--muted2);min-width:44px;text-align:right"></span>
+      </div>
+      <div style="font-size:10px;color:var(--muted);line-height:1.45">
+        We’ll use these for future signal alerts. No trade execution.
+      </div>
+    </div>
+  </div>
+  <div class="chat-area">
     <div class="chat-label">Talk to bot</div>
     <div class="chat-messages" id="chat-messages"></div>
     <div class="cinput">
@@ -1821,10 +1841,117 @@ async function sendChat() {
   btn.disabled = false;
 }
 
+/* ── CONTACT FORM (alerts) ── */
+let contact = {email:'', phone:''};
+let contactErr = {email:'', phone:''};
+
+function _setContactError(field, msg) {
+  contactErr[field] = msg || '';
+  const el = document.getElementById(`c-${field}-err`);
+  if (el) el.textContent = contactErr[field];
+  const inp = document.getElementById(`c-${field}`);
+  if (inp) inp.style.borderColor = contactErr[field] ? '#e05555' : '';
+}
+
+function _validEmail(v) {
+  const s = String(v||'').trim();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
+}
+
+function _phoneToE164(v) {
+  const raw = String(v||'').trim();
+  if (!raw) return null;
+  if (raw.startsWith('+')) {
+    const digits = raw.replace(/[^\d]/g,'');
+    if (digits.length === 11 && digits.startsWith('1')) return `+${digits}`;
+    return null;
+  }
+  const digits = raw.replace(/[^\d]/g,'');
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length === 11 && digits.startsWith('1')) return `+${digits}`;
+  return null;
+}
+
+function validateEmail() {
+  const v = (document.getElementById('c-email')?.value || '').trim();
+  if (!v) return _setContactError('email', 'Please enter a valid email address'), false;
+  if (!_validEmail(v)) return _setContactError('email', 'Please enter a valid email address'), false;
+  _setContactError('email',''); return true;
+}
+
+function validatePhone() {
+  const v = (document.getElementById('c-phone')?.value || '').trim();
+  const e164 = _phoneToE164(v);
+  if (!e164) return _setContactError('phone', 'Please enter a valid phone number'), false;
+  _setContactError('phone',''); return true;
+}
+
+function bindContactInputs() {
+  const e = document.getElementById('c-email');
+  const p = document.getElementById('c-phone');
+  if (e && !e.__bound) {
+    e.addEventListener('blur', validateEmail);
+    e.addEventListener('input', () => _setContactError('email',''));
+    e.__bound = true;
+  }
+  if (p && !p.__bound) {
+    p.addEventListener('blur', validatePhone);
+    p.addEventListener('input', () => _setContactError('phone',''));
+    p.__bound = true;
+  }
+}
+
+async function loadContact() {
+  try {
+    const r = await fetch(`${API}/api/contact`);
+    const data = await r.json();
+    const email = String(data?.email||'');
+    const phone = String(data?.phone_e164||'');
+    const em = document.getElementById('c-email');
+    const ph = document.getElementById('c-phone');
+    if (em && email) em.value = email;
+    if (ph && phone) ph.value = phone; // show normalized
+    bindContactInputs();
+  } catch {}
+}
+
+async function saveContact() {
+  const em = document.getElementById('c-email');
+  const ph = document.getElementById('c-phone');
+  const email = (em?.value || '').trim();
+  const phone = (ph?.value || '').trim();
+  const okE = validateEmail();
+  const okP = validatePhone();
+  if (!okE || !okP) return;
+  const e164 = _phoneToE164(phone);
+  const btn = document.getElementById('c-save');
+  if (btn) btn.disabled = true;
+  try {
+    const r = await fetch(`${API}/api/contact`, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({email, phone: e164 || phone}),
+    });
+    if (!r.ok) {
+      const j = await r.json().catch(()=>({}));
+      if (j?.error === 'invalid_email') _setContactError('email','Please enter a valid email address');
+      else if (j?.error === 'invalid_phone') _setContactError('phone','Please enter a valid phone number');
+      return;
+    }
+    const data = await r.json();
+    if (ph) ph.value = String(data?.phone_e164||'');
+    const s = document.getElementById('c-saved');
+    if (s) { s.textContent = 'Saved'; setTimeout(()=>{ s.textContent=''; }, 1500); }
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 /* ── INIT ── */
 initChartHover();
 fetchState();
 fetchRankings();
+loadContact();
 setInterval(fetchState, 5000);
 setInterval(fetchRankings, 30000);
 </script>
