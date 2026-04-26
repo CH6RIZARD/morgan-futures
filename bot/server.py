@@ -400,13 +400,14 @@ def get_state():
         "watchlist_min_expectancy": float(os.environ.get("WATCHLIST_MIN_EXPECTANCY", "0.15")),
         "base_min_expectancy": float(os.environ.get("BASE_MIN_EXPECTANCY", "0.20")),
         "base_min_winrate": float(os.environ.get("BASE_MIN_WINRATE", "30")),
-        "base_min_trades": float(os.environ.get("BASE_MIN_TRADES", "20")),
+        # Futures systems often have fewer samples per contract/session; default to lower minimums.
+        "base_min_trades": float(os.environ.get("BASE_MIN_TRADES", "10")),
         "elite_min_expectancy": float(os.environ.get("ELITE_MIN_EXPECTANCY", "1.00")),
         "elite_min_winrate": float(os.environ.get("ELITE_MIN_WINRATE", "30")),
-        "elite_min_trades": float(os.environ.get("ELITE_MIN_TRADES", "10")),
+        "elite_min_trades": float(os.environ.get("ELITE_MIN_TRADES", "5")),
         "super_min_expectancy": float(os.environ.get("SUPER_MIN_EXPECTANCY", "1.00")),
         "super_min_winrate": float(os.environ.get("SUPER_MIN_WINRATE", "60")),
-        "super_min_trades": float(os.environ.get("SUPER_MIN_TRADES", "20")),
+        "super_min_trades": float(os.environ.get("SUPER_MIN_TRADES", "10")),
     }
 
     base = {
@@ -539,8 +540,8 @@ def chat():
 
     # Explain ignored / no trades
     if "ignored" in q or "watchlist" in q or "not testing" in q or "0 backtest" in q:
-        min_c = int(os.environ.get("BACKTEST_MIN_CANDLES", "1500"))
-        days = int(os.environ.get("BACKTEST_DAYS_BACK", "183"))
+        min_c = int(os.environ.get("BACKTEST_MIN_CANDLES", str(BACKTEST_MIN_CANDLES)))
+        days = int(os.environ.get("BACKTEST_DAYS_BACK", str(BACKTEST_DAYS_BACK)))
         yf_period = os.environ.get("YF_INTRADAY_PERIOD", "30d")
         return jsonify(
             {
