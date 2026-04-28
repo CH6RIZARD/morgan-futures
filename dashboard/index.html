@@ -1457,7 +1457,12 @@ async function fireTestSignal(){
       setUiStatus(false, j?.error || `test signal failed: ${r.status}`);
       return;
     }
-    setUiStatus(true);
+    try{
+      const s = j?.signal || {};
+      const e = s?.entry, sl = s?.stop_loss, tp = s?.take_profit;
+      const msg = (e && sl && tp) ? `${sym} ${strategy} ${direction} E:${e} SL:${sl} TP:${tp}` : '';
+      setUiStatus(true, msg);
+    } catch { setUiStatus(true); }
     // If SIM: paper engine mirrors immediately; if LIVE: challenge positions will update asynchronously.
     await fetchPaperState();
     await fetchChallenge();
@@ -2326,33 +2331,6 @@ async function fetchPaperState(){
   } catch(e) {}
 }
 
-async function fireTestSignal(){
-  const sym = String(document.getElementById('ts-symbol')?.value || 'RTY=F').trim();
-  const strategy = String(document.getElementById('ts-strategy')?.value || 'ORB').trim().toUpperCase();
-  const direction = String(document.getElementById('ts-direction')?.value || 'BUY').trim().toUpperCase();
-  const qty = parseInt(String(document.getElementById('ts-qty')?.value || '1').trim(), 10) || 1;
-  try{
-    const payload = {symbol: sym, strategy, direction, qty};
-    const r = await fetch(`${API}/api/signal/test`, {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify(payload),
-    });
-    const j = await r.json().catch(()=>({}));
-    if (!r.ok || j.ok === false){
-      setUiStatus(false, `test signal failed: ${j?.error || r.status}`);
-      return;
-    }
-    setUiStatus(true);
-    // Pull fresh paper/live state immediately so the metrics visibly move.
-    await fetchPaperState();
-    await fetchChallenge();
-    await fetchState();
-  } catch(e){
-    setUiStatus(false, `test signal failed: ${e?.message || String(e)}`);
-  }
-}
-
 async function paperSubmit(){
   const btn = document.getElementById('paper-submit');
   if (btn) btn.disabled = true;
@@ -2438,7 +2416,7 @@ function setUiStatus(ok, msg='') {
   if (ok) {
     el.textContent = 'OK';
     el.style.color = 'var(--green)';
-    el.title = '';
+    el.title = msg || '';
   } else {
     el.textContent = 'ERROR';
     el.style.color = '#e05555';
