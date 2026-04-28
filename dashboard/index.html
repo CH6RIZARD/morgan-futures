@@ -1549,22 +1549,27 @@ function updateUI() {
     ? (state.open_positions || []).length
     : (Array.isArray(paper.positions) ? paper.positions.length : 0);
 
+  const _n = (x) => (Number.isFinite(Number(x)) ? Number(x) : null);
+  const balN = _n(bal);
+  const startN = _n(startBal);
+  const pnlN = _n(pnl);
+
   // Balance history for the small chart in both modes.
-  if (bal > 0) {
-    balanceHistory.push({t: Date.now(), v: bal});
+  if (balN != null && balN > 0) {
+    balanceHistory.push({t: Date.now(), v: balN});
     if (balanceHistory.length > 120) balanceHistory.shift();
   }
 
   /* balance */
-  document.getElementById('balance').textContent = `$${bal.toFixed(2)}`;
+  document.getElementById('balance').textContent = balN == null ? '$—' : `$${balN.toFixed(2)}`;
   document.getElementById('balance').className = 'mval';
-  document.getElementById('balance-sub').textContent = `Start: $${startBal.toFixed(2)}`;
+  document.getElementById('balance-sub').textContent = startN == null ? 'Start: —' : `Start: $${startN.toFixed(2)}`;
 
   /* pnl */
   const pnlEl = document.getElementById('daily-pnl');
-  pnlEl.textContent = `${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}`;
-  pnlEl.className = 'mval ' + (pnl >= 0 ? 'green' : 'red');
-  document.getElementById('daily-pnl-pct').textContent = `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(3)}% today`;
+  pnlEl.textContent = pnlN == null ? '$—' : `${pnlN >= 0 ? '+' : ''}$${pnlN.toFixed(2)}`;
+  pnlEl.className = 'mval ' + (pnlN == null ? '' : (pnlN >= 0 ? 'green' : 'red'));
+  document.getElementById('daily-pnl-pct').textContent = (Number.isFinite(pnlPct) ? `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(3)}% today` : '—');
 
   /* positions */
   document.getElementById('open-pos').textContent = openPos;
@@ -1583,13 +1588,13 @@ function updateUI() {
   document.getElementById('target-sub').textContent = `$${Math.max(pnl, 0).toFixed(2)} / $${targetAmt.toFixed(2)}`;
 
   /* progress bar */
-  const lossFloor = startBal * 0.90;
-  const drawdownPct = startBal > 0 ? Math.max(0, (startBal - bal) / startBal * 100) : 0;
-  document.getElementById('prog-floor').textContent = `$${lossFloor.toFixed(2)}`;
+  const lossFloor = (startN ?? 0) * 0.90;
+  const drawdownPct = (startN && startN > 0 && balN != null) ? Math.max(0, (startN - balN) / startN * 100) : 0;
+  document.getElementById('prog-floor').textContent = startN == null ? '$—' : `$${lossFloor.toFixed(2)}`;
   document.getElementById('prog-fill').style.width = `${Math.min(drawdownPct * 10, 100)}%`;
-  document.getElementById('prog-left').textContent = `${drawdownPct.toFixed(2)}% drawdown`;
-  document.getElementById('prog-right').textContent = `$${bal.toFixed(2)} current`;
-  document.getElementById('prog-target').textContent = `$${(startBal * 1.006).toFixed(2)}`;
+  document.getElementById('prog-left').textContent = Number.isFinite(drawdownPct) ? `${drawdownPct.toFixed(2)}% drawdown` : '—';
+  document.getElementById('prog-right').textContent = balN == null ? '$—' : `$${balN.toFixed(2)} current`;
+  document.getElementById('prog-target').textContent = startN == null ? '$—' : `$${(startN * 1.006).toFixed(2)}`;
 
   /* toggle */
   const btn = document.getElementById('toggle-btn');
