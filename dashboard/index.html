@@ -7,9 +7,10 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Syne+Mono&family=Syne:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 <style>
 :root{
-  /* “My Trading” / TradingView-esque: warm dark + subtle grid */
+  /* Default theme: your warm brown trading vibe */
   --bg:#2a2420;
   --panel:#201b18;
   --panel2:#1a1513;
@@ -22,6 +23,38 @@
   --green:#7ccaa3;
   --red:#e07070;
   --shadow:rgba(0,0,0,.55);
+}
+
+/* Alt theme: black/dark (GitHub-dark/Bloomberg-ish) */
+body.theme-dark{
+  --bg:#0D1117;
+  --panel:#161B22;
+  --panel2:#0D1117;
+  --text:#E6EDF3;
+  --muted:#8B949E;
+  --muted2:#8B949E;
+  --border:#30363D;
+  --purple:#2F81F7; /* primary */
+  --gold:#58A6FF;   /* accent */
+  --green:#3FB950;
+  --red:#F85149;
+  --shadow:transparent;
+}
+
+/* Alt theme: light */
+body.theme-light{
+  --bg:#F0EDE8;
+  --panel:#FFFFFF;
+  --panel2:#FFFFFF;
+  --text:#1A1510;
+  --muted:#7A6E62;
+  --muted2:#7A6E62;
+  --border:#DDD8D0;
+  --purple:#1A6FD4;
+  --gold:#2F81F7;
+  --green:#27AE60;
+  --red:#C0392B;
+  --shadow:rgba(26, 21, 16, 0.12);
 }
 *{margin:0;padding:0;box-sizing:border-box}
 body{
@@ -37,6 +70,9 @@ body{
 }
 a{color:inherit;text-decoration:none}
 *:focus{outline:none;box-shadow:0 0 0 3px rgba(210, 180, 140, 0.35)}
+*:focus{outline:none;box-shadow:0 0 0 3px rgba(210, 180, 140, 0.35)}
+body.theme-dark *:focus{box-shadow:0 0 0 3px rgba(47, 129, 247, 0.35)}
+body.theme-light *:focus{box-shadow:0 0 0 3px rgba(47, 129, 247, 0.28)}
 
 /* ── HEADER ── */
 .hdr{
@@ -70,6 +106,43 @@ a{color:inherit;text-decoration:none}
 .pill{display:flex;align-items:center;gap:6px;padding:5px 14px;border-radius:4px;font-size:11px;font-weight:500;cursor:pointer;border:1px solid;transition:opacity .15s}
 .pill.active{background:rgba(13,165,116,.10);color:var(--green);border-color:rgba(13,165,116,.65)}
 .pill.paused{background:rgba(212,168,67,.10);color:var(--gold);border-color:rgba(212,168,67,.65)}
+.hdr-profile{
+  background:var(--panel2);
+  border:1px solid var(--border);
+  color:var(--text);
+  padding:6px 12px;
+  border-radius:8px;
+  font-size:11px;
+  font-weight:700;
+  font-family:inherit;
+  cursor:pointer;
+}
+.hdr-profile:hover{border-color:var(--gold);color:var(--gold)}
+.profile-step{
+  border:1px solid var(--border);
+  border-radius:10px;
+  padding:12px 14px;
+  margin-bottom:10px;
+  background:rgba(0,0,0,.06);
+}
+.profile-step h4{font-size:11px;color:var(--text);margin-bottom:6px}
+.profile-step p,.profile-step li{font-size:10px;color:var(--muted);line-height:1.45;margin:0}
+.profile-step ul{margin:6px 0 0 16px;padding:0}
+.profile-field{width:100%;margin-top:8px;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--panel2);color:var(--text);font-family:inherit;font-size:11px}
+.profile-check{display:flex;align-items:center;gap:8px;margin-top:8px;font-size:10px;color:var(--muted)}
+.paper-tf-wrap{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+.paper-tf-wrap select{
+  flex:1;
+  min-width:140px;
+  max-width:100%;
+  background:var(--panel2);
+  border:1px solid var(--border);
+  color:var(--text);
+  padding:8px 10px;
+  border-radius:8px;
+  font-family:inherit;
+  font-size:11px;
+}
 .dot{width:6px;height:6px;border-radius:50%;background:currentColor;animation:pulse 2s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
 
@@ -140,11 +213,35 @@ body.paper-mode .main{grid-template-columns:1fr}
 body.paper-mode .right{display:none}
 body.paper-mode .left{min-height:calc(100vh - 54px);height:calc(100vh - 54px)}
 body.paper-mode #panel-rankings{display:none!important}
+body.paper-mode #panel-calendar{display:none!important}
+body.paper-mode #panel-history{display:none!important}
 body.paper-mode #panel-paper{display:block!important;flex:1;min-height:calc(100vh - 86px)}
-body.paper-mode #panel-paper .paper-grid{grid-template-columns:1.15fr .85fr}
-@media(max-width:980px){
-  body.paper-mode #panel-paper .paper-grid{grid-template-columns:1fr}
+body.paper-mode .paper-workspace{flex:1;display:flex;flex-direction:column;min-height:0}
+body.paper-mode .paper-grid{
+  display:grid;
+  grid-template-columns:1fr 6px minmax(260px, min(var(--paper-col-w, 380px), 48vw));
+  gap:0 10px;
+  align-items:start;
 }
+.paper-splitter{
+  display:none;
+  width:6px;
+  min-height:200px;
+  cursor:col-resize;
+  border-radius:4px;
+  background:linear-gradient(180deg, transparent, rgba(210,180,140,.12), transparent);
+  align-self:stretch;
+  margin:8px 0;
+  touch-action:none;
+}
+.paper-splitter:hover{background:rgba(210,180,140,.18)}
+@media(min-width:981px){
+  .paper-splitter{display:block}
+}
+@media(max-width:980px){
+  body.paper-mode .paper-grid{grid-template-columns:1fr}
+}
+
 
 /* ── SECTION HEADER ── */
 .phdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
@@ -297,8 +394,6 @@ body.paper-mode #panel-paper .paper-grid{grid-template-columns:1.15fr .85fr}
 .when-time{color:var(--green);font-weight:500;font-size:10px;padding-top:1px}
 .when-desc{color:var(--muted);line-height:1.5}
 
-.tv-btn{display:flex;align-items:center;gap:6px;background:#1a2a1a;border:1px solid var(--green);color:var(--green);padding:9px 14px;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;text-decoration:none;width:100%;justify-content:center;margin:0 20px 16px;width:calc(100% - 40px);transition:opacity .15s}
-.tv-btn:hover{opacity:.8}
 
 /* simple loading placeholders for missing cards */
 .sym-skel{background:var(--panel);border:1px solid var(--border);padding:12px;border-radius:4px;position:relative;overflow:hidden}
@@ -378,6 +473,53 @@ td{font-size:11px;padding:9px 0;border-bottom:1px solid #1a1232;color:#cbbff0;ve
 .ravg.pos{color:var(--green)}
 .ravg.neg{color:#e05555}
 
+/* ── CONTROL CENTER ── */
+.cc-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px}
+@media(max-width:760px){.cc-grid{grid-template-columns:repeat(2,1fr)}}
+.cc-stat{background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:10px 12px}
+.cc-label{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px}
+.cc-val{font-size:17px;font-weight:600;color:var(--text)}
+.cc-val.g{color:var(--green)}
+.cc-val.r{color:#e05555}
+.cc-val.o{color:var(--gold)}
+.cc-sub{font-size:10px;color:var(--muted2);margin-top:3px}
+.cc-prog-track{height:6px;background:var(--border);border-radius:3px;overflow:hidden;margin:4px 0 2px}
+.cc-prog-fill{height:100%;background:linear-gradient(90deg,var(--green),#3fb950);border-radius:3px;transition:width .5s}
+.cc-row{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:var(--panel2);border:1px solid var(--border);border-radius:8px;margin-bottom:10px}
+.mode-switch{display:flex;gap:4px;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:3px}
+.mode-switch button{padding:5px 16px;border:none;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;transition:all .15s;background:transparent;color:var(--muted)}
+.mode-switch button.on-sim{background:rgba(210,180,140,.18);color:var(--gold)}
+.mode-switch button.on-live{background:rgba(124,202,163,.18);color:var(--green)}
+.rconn{display:flex;align-items:center;gap:6px;font-size:10px}
+.rconn-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.rconn-dot.connected{background:var(--green);animation:pulse 2s infinite}
+.rconn-dot.disconnected{background:#e05555}
+.rconn-dot.waiting{background:var(--gold);animation:pulse 2s infinite}
+.ts-form{background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:12px}
+.ts-inputs{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px}
+@media(max-width:600px){.ts-inputs{grid-template-columns:1fr 1fr}}
+.ts-select{background:var(--bg);border:1px solid var(--border);color:var(--text);padding:9px 10px;border-radius:7px;font-family:inherit;font-size:11px;width:100%}
+.ts-btn{width:100%;padding:10px;background:rgba(210,180,140,.15);border:1px solid rgba(210,180,140,.35);color:var(--gold);border-radius:7px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;transition:all .15s}
+.ts-btn:hover{background:rgba(210,180,140,.25)}
+.ts-btn.live-mode{background:rgba(124,202,163,.15);border-color:rgba(124,202,163,.40);color:var(--green)}
+.ts-btn.live-mode:hover{background:rgba(124,202,163,.25)}
+.ts-result{margin-top:8px;font-size:10px;line-height:1.5;padding:8px 10px;border-radius:6px;display:none}
+.ts-result.ok{background:#1a2a1a;border-left:2px solid var(--green);color:#b7e0c4;display:block}
+.ts-result.err{background:#2a1a1a;border-left:2px solid #e05555;color:#e07070;display:block}
+.ch-passed{background:#1a2a1a;border:1px solid rgba(124,202,163,.4);border-radius:8px;padding:14px;text-align:center;margin-bottom:14px}
+.ch-busted{background:#2a1a1a;border:1px solid rgba(224,85,85,.4);border-radius:8px;padding:14px;text-align:center;margin-bottom:14px}
+.live-pos-row{display:grid;grid-template-columns:70px 44px 1fr 80px 80px;gap:8px;align-items:center;padding:9px 10px;background:var(--panel2);border:1px solid var(--border);border-radius:7px;margin-bottom:6px;font-size:11px}
+.live-pos-row:last-child{margin-bottom:0}
+.lp-sym{font-weight:700;color:var(--text)}
+.lp-side-buy{color:var(--green);font-weight:700;font-size:10px}
+.lp-side-sell{color:#e05555;font-weight:700;font-size:10px}
+.lp-levels{font-size:10px;color:var(--muted);line-height:1.5}
+.lp-mark{font-size:12px;font-weight:500;color:var(--text);text-align:right}
+.lp-upnl{font-size:13px;font-weight:700;text-align:right}
+.lp-upnl.pos{color:var(--green)}
+.lp-upnl.neg{color:#e05555}
+.lp-upnl.wait{color:var(--muted)}
+
 /* ── RESPONSIVE ── */
 @media(max-width:1100px){
   .metrics{grid-template-columns:repeat(3,1fr)}
@@ -423,6 +565,15 @@ td{font-size:11px;padding:9px 0;border-bottom:1px solid #1a1232;color:#cbbff0;ve
   .chat-messages{max-height:140px}
   /* Toggle pill smaller */
   .pill{padding:5px 10px;font-size:10px}
+
+  /* Paper trading mobile: keep it actually usable */
+  body.paper-mode .left{height:auto;min-height:calc(100vh - 54px)}
+  body.paper-mode #panel-paper{min-height:calc(100vh - 54px)}
+  
+  body.paper-mode .paper-grid{grid-template-columns:1fr!important}
+  body.paper-mode #paper-positions{max-height:32vh;overflow:auto}
+  body.paper-mode #paper-trades{max-height:34vh;overflow:auto}
+  #theme-select{width:100%}
 }
 
 @media(max-width:430px){
@@ -430,6 +581,70 @@ td{font-size:11px;padding:9px 0;border-bottom:1px solid #1a1232;color:#cbbff0;ve
   .metric:nth-child(5){grid-column:1 / span 2}
   .sym-grid{grid-template-columns:1fr}
 }
+
+
+/* === Mobile-first paper trading: chart is full screen, controls are a bottom sheet === */
+body.paper-mode #panel-paper{padding-bottom:0}
+body.paper-mode #paper-stage{position:relative}
+
+/* Sheet styling */
+#paper-sheet{display:none}
+#paper-sheet-grab{display:none}
+#paper-sheet-body{display:flex;flex-direction:column;gap:10px}
+#paper-sheet .grab-pill{width:44px;height:5px;border-radius:999px;background:rgba(255,255,255,.28);margin:10px auto}
+
+@media(max-width:980px){
+  body.paper-mode .left{height:100vh;min-height:100vh}
+  body.paper-mode #panel-paper{min-height:100vh}
+
+  /* Hide the metric tiles on mobile (values still update via API) */
+  body.paper-mode #panel-paper .paper-metrics{display:none}
+
+  /* Full-screen chart */
+  body.paper-mode #paper-chart-card{position:fixed;inset:0;z-index:10;border-radius:0;padding:10px;border:none;background:var(--panel2)}
+  body.paper-mode #paper-tf-row{position:absolute;left:10px;right:10px;top:44px;z-index:11}
+  body.paper-mode #paper-chart{position:absolute;left:0;right:0;top:0;bottom:0;height:auto!important;width:100vw;border-radius:0;border:none}
+  body.paper-mode #paper-chart-status{position:absolute;right:12px;top:14px;z-index:12}
+
+  /* Bottom sheet overlay */
+  body.paper-mode #paper-sheet{display:block;position:fixed;left:0;right:0;bottom:0;z-index:20;max-height:62vh;background:rgba(13,17,23,.82);backdrop-filter: blur(10px);border-top:1px solid var(--border);border-radius:16px 16px 0 0}
+  body.paper-mode #paper-sheet-grab{display:block;cursor:grab}
+  body.paper-mode #paper-sheet-body{padding:10px 10px 14px;overflow:auto;max-height:calc(62vh - 34px)}
+
+  /* Make inputs finger-friendly */
+  body.paper-mode #paper-order-card input,
+  body.paper-mode #paper-order-card select{font-size:14px;padding:12px 12px}
+  body.paper-mode #paper-submit{padding:12px 12px;font-size:13px}
+
+  /* Avoid nested scroll jank */
+  body.paper-mode #paper-positions,
+  body.paper-mode #paper-trades{max-height:none;overflow:visible}
+}
+
+/* Desktop paper: chart + order column (sheet visible, not a bottom drawer) */
+@media(min-width:981px){
+  body.paper-mode #paper-workspace{min-height:calc(100vh - 140px)}
+  body.paper-mode #paper-chart-card{min-height:0}
+  body.paper-mode #paper-chart{height:min(58vh,520px)!important;min-height:380px}
+  body.paper-mode #paper-sheet{
+    display:block;
+    position:relative;
+    transform:none!important;
+    max-height:none;
+    background:transparent;
+    border:none;
+    border-radius:0;
+    backdrop-filter:none;
+    -webkit-backdrop-filter:none;
+  }
+  body.paper-mode #paper-sheet-grab{display:none!important}
+  body.paper-mode #paper-sheet-body{
+    max-height:none;
+    padding:0;
+    overflow:visible;
+  }
+}
+
 </style>
 </head>
 <body>
@@ -453,6 +668,12 @@ td{font-size:11px;padding:9px 0;border-bottom:1px solid #1a1232;color:#cbbff0;ve
     </div>
   </div>
   <div class="hright">
+    <button type="button" class="hdr-profile" id="btn-profile" onclick="openProfile()">Profile</button>
+    <select id="theme-select" onchange="setTheme(this.value)" style="background:var(--panel2);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:8px;font-family:inherit;font-size:11px">
+      <option value="brown">Brown</option>
+      <option value="dark">Dark</option>
+      <option value="light">Light</option>
+    </select>
     <span style="font-size:10px;color:var(--muted2)" id="last-update">—</span>
     <div class="pill active" id="toggle-btn" onclick="toggleBot()">
       <div class="dot"></div>
@@ -554,8 +775,124 @@ td{font-size:11px;padding:9px 0;border-bottom:1px solid #1a1232;color:#cbbff0;ve
 <div class="main">
 <div class="left">
 
+  <!-- CONTROL CENTER -->
+  <div class="panel" id="panel-control">
+
+    <!-- Challenge status banner (shown when passed or busted) -->
+    <div id="ch-passed-banner" class="ch-passed" style="display:none">
+      <div style="font-size:18px;margin-bottom:4px">🎉</div>
+      <div style="font-size:13px;font-weight:700;color:var(--green)">Challenge Passed!</div>
+      <div style="font-size:10px;color:var(--muted);margin-top:4px">Profit target + consistency met. Request your funded account.</div>
+    </div>
+    <div id="ch-busted-banner" class="ch-busted" style="display:none">
+      <div style="font-size:13px;font-weight:700;color:#e05555">Drawdown Limit Hit</div>
+      <div style="font-size:10px;color:var(--muted);margin-top:4px">Max DD reached. Reset to try again.</div>
+      <button onclick="resetChallenge()" style="margin-top:8px;background:none;border:1px solid #e05555;color:#e05555;padding:5px 14px;border-radius:5px;cursor:pointer;font-size:10px;font-family:inherit">Reset State</button>
+    </div>
+
+    <div class="phdr" style="margin-bottom:12px">
+      <div class="ptitle">Lucid 50K Challenge</div>
+      <div id="ch-status-pill" class="pbadge">Active</div>
+    </div>
+
+    <!-- 4 challenge metrics -->
+    <div class="cc-grid">
+      <div class="cc-stat">
+        <div class="cc-label">Total P&L</div>
+        <div class="cc-val g" id="ch-total">$0</div>
+        <div class="cc-sub" id="ch-pct">0% to target</div>
+      </div>
+      <div class="cc-stat">
+        <div class="cc-label">Drawdown</div>
+        <div class="cc-val" id="ch-dd">$0</div>
+        <div class="cc-sub" id="ch-dd-left">$2000 left</div>
+      </div>
+      <div class="cc-stat">
+        <div class="cc-label">Consistency</div>
+        <div class="cc-val" id="ch-consistency">—</div>
+        <div class="cc-sub">limit 52%</div>
+      </div>
+      <div class="cc-stat">
+        <div class="cc-label">Today</div>
+        <div class="cc-val" id="ch-today">$0</div>
+        <div class="cc-sub" id="ch-today-left">$1400 cap</div>
+      </div>
+    </div>
+
+    <!-- Progress bar $0 → $3000 -->
+    <div style="margin-bottom:14px">
+      <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted2);margin-bottom:4px">
+        <span>$0</span>
+        <span id="ch-prog-label" style="color:var(--text);font-weight:500">$0 / $3000</span>
+        <span style="color:var(--green)">$3000 target</span>
+      </div>
+      <div class="cc-prog-track">
+        <div class="cc-prog-fill" id="ch-prog-bar" style="width:0%"></div>
+      </div>
+    </div>
+
+    <!-- Open live positions -->
+    <div id="ch-positions-wrap" style="margin-bottom:14px;display:none">
+      <div style="font-size:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Open Positions</div>
+      <div id="ch-positions-list"></div>
+    </div>
+
+    <!-- SIM / LIVE toggle row -->
+    <div class="cc-row" style="margin-bottom:10px">
+      <div>
+        <div style="font-size:11px;font-weight:600;color:var(--text);margin-bottom:4px">Trading Mode</div>
+        <div class="rconn">
+          <div class="rconn-dot waiting" id="rconn-dot"></div>
+          <span id="rconn-label" style="color:var(--muted)">Rithmic: checking…</span>
+        </div>
+      </div>
+      <div class="mode-switch">
+        <button id="btn-sim" class="on-sim" onclick="setTradingMode('sim')">SIM</button>
+        <button id="btn-live" onclick="setTradingMode('live')">LIVE</button>
+      </div>
+    </div>
+
+    <p class="subhint" style="margin-top:4px">Automated signals only — no manual broker fire from this dashboard. Internal paper fills are under <strong>Paper Trading</strong>.</p>
+
+    <!-- Test signal helper (SIM updates paper; LIVE executes bracket) -->
+    <div style="margin-top:12px;border:1px solid var(--border);border-radius:12px;padding:10px 10px;background:rgba(0,0,0,.06)">
+      <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Test Signal</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <select id="ts-symbol" class="profile-field" style="margin-top:0">
+          <option value="RTY=F">RTY</option>
+          <option value="ES=F">ES</option>
+          <option value="NQ=F">NQ</option>
+          <option value="YM=F">YM</option>
+          <option value="MES=F">MES</option>
+          <option value="MNQ=F">MNQ</option>
+          <option value="MYM=F">MYM</option>
+          <option value="CL=F">CL</option>
+          <option value="GC=F">GC</option>
+          <option value="ZB=F">ZB</option>
+        </select>
+        <select id="ts-strategy" class="profile-field" style="margin-top:0">
+          <option value="ORB">ORB</option>
+          <option value="KZ">KZ</option>
+          <option value="ASHL">ASHL</option>
+          <option value="LRNY">LRNY</option>
+        </select>
+        <select id="ts-direction" class="profile-field" style="margin-top:0">
+          <option value="BUY">BUY (Long)</option>
+          <option value="SELL">SELL (Short)</option>
+        </select>
+        <input id="ts-qty" class="profile-field" style="margin-top:0" placeholder="Qty (SIM only, default 1)" value="1" />
+      </div>
+      <button onclick="fireTestSignal()" class="hdr-profile" style="margin-top:10px;width:100%">Fire Test Signal</button>
+      <div style="margin-top:8px;font-size:10px;color:var(--muted2);line-height:1.35">
+        SIM: opens a paper position and P&amp;L will move under your main metrics.<br>
+        LIVE: sends a real bracket to Rithmic (if enabled + connected).
+      </div>
+    </div>
+
+  </div>
+
   <!-- CALENDAR -->
-  <div class="panel">
+  <div class="panel" id="panel-calendar">
     <div class="phdr">
       <div style="display:flex;align-items:center;gap:12px">
         <div class="ptitle">Trading Calendar</div>
@@ -640,7 +977,7 @@ td{font-size:11px;padding:9px 0;border-bottom:1px solid #1a1232;color:#cbbff0;ve
       <div class="ptitle">Paper Trading</div>
       <div class="pbadge">Simulated</div>
     </div>
-    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">
+    <div class="paper-metrics" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">
       <div style="background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px">
         <div class="mlabel">Balance</div>
         <div class="mval" id="paper-balance">$—</div>
@@ -663,40 +1000,64 @@ td{font-size:11px;padding:9px 0;border-bottom:1px solid #1a1232;color:#cbbff0;ve
       </div>
     </div>
 
-    <div class="paper-grid" style="display:grid;grid-template-columns:1.15fr .85fr;gap:10px;margin-top:12px">
-      <div style="background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px">
-        <div class="mlabel" style="margin-bottom:10px">Order entry (market fill)</div>
-        <div style="display:grid;grid-template-columns:1.2fr .9fr .8fr .8fr;gap:8px;align-items:center">
-          <select id="paper-sym" style="background:var(--panel2);border:1px solid var(--border);color:var(--text);padding:10px 10px;border-radius:8px;font-family:inherit"></select>
-          <select id="paper-side" style="background:var(--panel2);border:1px solid var(--border);color:var(--text);padding:10px 10px;border-radius:8px;font-family:inherit">
-            <option value="BUY">Long (BUY)</option>
-            <option value="SELL">Short (SELL)</option>
-          </select>
-          <input id="paper-qty" placeholder="Qty" value="1" inputmode="numeric" style="background:var(--panel2);border:1px solid var(--border);color:var(--text);padding:10px 10px;border-radius:8px;font-family:inherit">
-          <button id="paper-submit" onclick="paperSubmit()" style="background:var(--green);border:none;color:#0a0320;padding:10px 12px;border-radius:8px;font-size:11px;font-weight:800;font-family:inherit;cursor:pointer">Place</button>
+    <div id="paper-workspace" class="paper-workspace">
+    <div id="paper-grid" class="paper-grid" style="--paper-col-w:380px">
+    <div id="paper-stage">
+      <div id="paper-chart-card" style="background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px">
+        <div class="mlabel" style="margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;gap:10px">
+          <span>Chart</span>
+          <span style="color:var(--muted2);font-size:10px;text-align:right;max-width:70%" id="paper-chart-status">-</span>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;align-items:center;margin-top:8px">
-          <input id="paper-sl" placeholder="Stop loss (price)" style="background:var(--panel2);border:1px solid var(--border);color:var(--text);padding:10px 10px;border-radius:8px;font-family:inherit">
-          <input id="paper-tp" placeholder="Take profit (price)" style="background:var(--panel2);border:1px solid var(--border);color:var(--text);padding:10px 10px;border-radius:8px;font-family:inherit">
-          <input id="paper-trail" placeholder="Trailing stop (ticks)" inputmode="numeric" style="background:var(--panel2);border:1px solid var(--border);color:var(--text);padding:10px 10px;border-radius:8px;font-family:inherit">
+        <div class="paper-tf-wrap" id="paper-tf-row">
+          <label for="paper-tf-select" style="font-size:10px;color:var(--muted);white-space:nowrap">Timeframe</label>
+          <select id="paper-tf-select" onchange="setPaperTf(this.value)" aria-label="Chart timeframe"></select>
         </div>
-        <div class="subhint" id="paper-hint" style="margin-top:10px">Orders fill at the current mark. SL/TP/trailing are managed automatically.</div>
-      </div>
-
-      <div style="background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:10px">
-        <div class="mlabel">Open positions</div>
-        <div id="paper-positions" style="flex:1;min-height:120px"></div>
+        <div id="paper-chart" style="height:360px;width:100%;border-radius:10px;overflow:hidden;border:1px solid var(--border);background:var(--panel2)"></div>
       </div>
     </div>
+    <div id="paper-splitter" class="paper-splitter" title="Drag to resize chart / order column"></div>
 
-    <div style="margin-top:12px;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px">
-      <div class="mlabel" style="margin-bottom:10px">Trade log (paper)</div>
-      <div id="paper-trades"></div>
+    <div id="paper-sheet" aria-label="Scalp and order panel">
+      <div id="paper-sheet-grab" title="Drag">
+        <div class="grab-pill"></div>
+      </div>
+      <div id="paper-sheet-body">
+        <div id="paper-order-card" style="background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px">
+          <div class="mlabel" style="margin-bottom:10px">Order entry (market fill)</div>
+          <div style="display:grid;grid-template-columns:1.2fr .9fr .8fr .8fr;gap:8px;align-items:center">
+            <select id="paper-sym" style="background:var(--panel2);border:1px solid var(--border);color:var(--text);padding:10px 10px;border-radius:8px;font-family:inherit"></select>
+            <select id="paper-side" style="background:var(--panel2);border:1px solid var(--border);color:var(--text);padding:10px 10px;border-radius:8px;font-family:inherit">
+              <option value="BUY">Long (BUY)</option>
+              <option value="SELL">Short (SELL)</option>
+            </select>
+            <input id="paper-qty" placeholder="Qty" value="1" inputmode="numeric" style="background:var(--panel2);border:1px solid var(--border);color:var(--text);padding:10px 10px;border-radius:8px;font-family:inherit">
+            <button id="paper-submit" onclick="paperSubmit()" style="background:var(--green);border:none;color:#0a0320;padding:10px 12px;border-radius:8px;font-size:11px;font-weight:800;font-family:inherit;cursor:pointer">Place</button>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;align-items:center;margin-top:8px">
+            <input id="paper-sl" placeholder="Stop loss (price)" style="background:var(--panel2);border:1px solid var(--border);color:var(--text);padding:10px 10px;border-radius:8px;font-family:inherit">
+            <input id="paper-tp" placeholder="Take profit (price)" style="background:var(--panel2);border:1px solid var(--border);color:var(--text);padding:10px 10px;border-radius:8px;font-family:inherit">
+            <input id="paper-trail" placeholder="Trailing stop (ticks)" inputmode="numeric" style="background:var(--panel2);border:1px solid var(--border);color:var(--text);padding:10px 10px;border-radius:8px;font-family:inherit">
+          </div>
+          <div class="subhint" id="paper-hint" style="margin-top:10px">Orders fill at the current mark. SL/TP/trailing are managed automatically.</div>
+        </div>
+
+        <div id="paper-positions-card" style="background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:10px">
+          <div class="mlabel">Open positions</div>
+          <div id="paper-positions" style="flex:1;min-height:120px"></div>
+        </div>
+
+        <div id="paper-trades-card" style="background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px">
+          <div class="mlabel" style="margin-bottom:10px">Trade log (paper)</div>
+          <div id="paper-trades"></div>
+        </div>
+      </div>
+    </div>
+    </div>
     </div>
   </div>
 
   <!-- TRADE LOG -->
-  <div class="panel" style="flex:1">
+  <div class="panel" id="panel-history" style="flex:1">
     <div class="phdr">
       <div class="ptitle">Trading History</div>
       <div class="pbadge" id="trade-count">0 trades</div>
@@ -790,10 +1151,6 @@ td{font-size:11px;padding:9px 0;border-bottom:1px solid #1a1232;color:#cbbff0;ve
       <div id="m-when"></div>
     </div>
 
-    <a id="m-tv-btn" href="#" target="_blank" rel="noopener" class="tv-btn">
-      <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 7h10M7 2l5 5-5 5" stroke="var(--green)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      View on TradingView SuperCharts
-    </a>
   </div>
 </div>
 
@@ -818,6 +1175,49 @@ td{font-size:11px;padding:9px 0;border-bottom:1px solid #1a1232;color:#cbbff0;ve
   </div>
 </div>
 
+<!-- Profile / onboarding (client prefs; Rithmic secrets stay server-side in .env) -->
+<div class="overlay" id="profile-overlay" onclick="closeProfile(event)">
+  <div class="modal" id="profile-modal" onclick="event.stopPropagation()">
+    <div class="modal-hdr">
+      <div class="modal-hdr-left">
+        <div>
+          <div class="modal-sym">Profile &amp; setup</div>
+          <div class="modal-trades">Rithmic, accounts, scripts — saved in this browser</div>
+        </div>
+      </div>
+      <button type="button" class="modal-close" onclick="closeProfileDirect()">×</button>
+    </div>
+    <div class="msec">
+      <div class="profile-step">
+        <h4>1. Rithmic / Lucid</h4>
+        <p>Put credentials in the server environment (Railway / Docker), not here. This UI never stores passwords.</p>
+        <ul>
+          <li><code>RITHMIC_*</code> / Lucid gateway vars your deployment already reads</li>
+          <li>Use SIM until you confirm sizing and brackets</li>
+        </ul>
+      </div>
+      <div class="profile-step">
+        <h4>2. Accounts for automation</h4>
+        <p>Labels for the connected session (multi-account aggregation is server-side later).</p>
+        <label class="profile-check"><input type="checkbox" id="pf-auto-sim" checked> Route <strong>automated signals</strong> to SIM when global mode is SIM</label>
+        <label class="profile-check"><input type="checkbox" id="pf-auto-live"> When LIVE is on, use the live Rithmic session (same as Lucid card)</label>
+        <p style="margin-top:8px;font-size:9px;color:var(--muted2)">Top metrics row still reflects the bot&rsquo;s primary account from the server until multi-account APIs land.</p>
+      </div>
+      <div class="profile-step">
+        <h4>3. Scripts (Pine / custom)</h4>
+        <p>Import path is planned. For now, describe what you want wired (e.g. webhook URL or file name).</p>
+        <textarea id="pf-scripts" class="profile-field" rows="3" placeholder="Notes: e.g. 'MyStrategy.pine via TradingView webhook → /api/...'"></textarea>
+      </div>
+      <div class="profile-step">
+        <h4>Display name</h4>
+        <input type="text" id="pf-display" class="profile-field" placeholder="Trader name (optional)" maxlength="80">
+      </div>
+      <button type="button" class="tab on" style="margin-top:4px;border:none;cursor:pointer;padding:10px 16px;border-radius:8px" onclick="saveProfile()">Save</button>
+      <span id="pf-saved" style="margin-left:10px;font-size:10px;color:var(--green)"></span>
+    </div>
+  </div>
+</div>
+
 <script>
 const API = window.location.origin;
 let state = {};
@@ -826,6 +1226,7 @@ let calTab = 'pnl';
 let calYear = new Date().getFullYear();
 let calMonth = new Date().getMonth();
 let selectedDay = null;
+let _paperData = null;
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 
@@ -854,10 +1255,6 @@ async function fetchState() {
   try {
     const r = await fetch(`${API}/api/state`);
     state = await r.json();
-    if (state.balance > 0) {
-      balanceHistory.push({t: Date.now(), v: state.balance});
-      if (balanceHistory.length > 120) balanceHistory.shift();
-    }
     updateUI();
   } catch(e) { console.error(e); }
 }
@@ -870,16 +1267,240 @@ async function fetchRankings() {
   } catch(e) {}
 }
 
+/* ── CHALLENGE + CONTROL CENTER ── */
+let _challengeData = {};
+
+async function fetchChallenge() {
+  try {
+    const r = await fetch(`${API}/api/challenge`);
+    _challengeData = await r.json();
+    renderChallenge(_challengeData);
+  } catch(e) {}
+}
+
+function renderChallenge(d) {
+  if (!d || !Object.keys(d).length) return;
+
+  // Status pill
+  const status = d.status || 'active';
+  const pill = document.getElementById('ch-status-pill');
+  if (pill) {
+    pill.textContent = status.charAt(0).toUpperCase() + status.slice(1);
+    pill.style.color = status === 'passed' ? 'var(--green)' : status === 'busted' ? '#e05555' : '';
+  }
+
+  // Banners
+  const passedBanner = document.getElementById('ch-passed-banner');
+  const bustedBanner = document.getElementById('ch-busted-banner');
+  if (passedBanner) passedBanner.style.display = status === 'passed' ? 'block' : 'none';
+  if (bustedBanner) bustedBanner.style.display = status === 'busted' ? 'block' : 'none';
+
+  // Metrics
+  const total = d.total_realized_pnl || 0;
+  const dd = d.drawdown || 0;
+  const ddLeft = d.drawdown_remaining || 0;
+  const consistency = d.consistency_pct || 0;
+  const consistencyOk = d.consistency_ok !== false;
+  const todayPnl = d.daily_pnl_today || 0;
+  const todayLeft = d.daily_remaining || 0;
+  const pctToTarget = d.pct_to_target || 0;
+  const target = d.profit_target || 3000;
+
+  const el = (id) => document.getElementById(id);
+  if (el('ch-total')) {
+    el('ch-total').textContent = `${total >= 0 ? '+' : ''}$${total.toFixed(0)}`;
+    el('ch-total').className = 'cc-val ' + (total >= 0 ? 'g' : 'r');
+  }
+  if (el('ch-pct')) el('ch-pct').textContent = `${pctToTarget.toFixed(1)}% to target`;
+
+  if (el('ch-dd')) {
+    el('ch-dd').textContent = `$${dd.toFixed(0)}`;
+    el('ch-dd').className = 'cc-val ' + (dd > 1600 ? 'r' : dd > 1000 ? 'o' : '');
+  }
+  if (el('ch-dd-left')) el('ch-dd-left').textContent = `$${ddLeft.toFixed(0)} left`;
+
+  if (el('ch-consistency')) {
+    el('ch-consistency').textContent = total > 0 ? `${consistency.toFixed(1)}%` : '—';
+    el('ch-consistency').className = 'cc-val ' + (!consistencyOk ? 'r' : consistency > 40 ? 'o' : 'g');
+  }
+
+  if (el('ch-today')) {
+    el('ch-today').textContent = `${todayPnl >= 0 ? '+' : ''}$${todayPnl.toFixed(0)}`;
+    el('ch-today').className = 'cc-val ' + (todayPnl >= 0 ? 'g' : 'r');
+  }
+  if (el('ch-today-left')) el('ch-today-left').textContent = `$${todayLeft.toFixed(0)} cap left`;
+
+  // Progress bar
+  const pct = Math.min(Math.max(pctToTarget, 0), 100);
+  if (el('ch-prog-bar')) el('ch-prog-bar').style.width = `${pct}%`;
+  if (el('ch-prog-label')) el('ch-prog-label').textContent = `$${total.toFixed(0)} / $${target.toFixed(0)}`;
+
+  // Rithmic connection dot
+  const connected = d.rithmic_connected === true;
+  const liveEnabled = d.live_enabled === true;
+  const dot = el('rconn-dot');
+  const label = el('rconn-label');
+  if (dot && label) {
+    if (connected) {
+      dot.className = 'rconn-dot connected';
+      label.textContent = 'Rithmic: Connected';
+      label.style.color = 'var(--green)';
+    } else if (liveEnabled) {
+      dot.className = 'rconn-dot waiting';
+      label.textContent = 'Rithmic: Connecting…';
+      label.style.color = 'var(--gold)';
+    } else {
+      dot.className = 'rconn-dot disconnected';
+      label.textContent = 'Rithmic: SIM mode (not connected)';
+      label.style.color = 'var(--muted)';
+    }
+  }
+
+  // SIM / LIVE toggle buttons
+  const btnSim = el('btn-sim');
+  const btnLive = el('btn-live');
+  if (btnSim && btnLive) {
+    if (liveEnabled) {
+      btnSim.className = '';
+      btnLive.className = 'on-live';
+    } else {
+      btnSim.className = 'on-sim';
+      btnLive.className = '';
+    }
+  }
+
+  // Open live positions
+  const positions = d.open_positions || [];
+  const posWrap = el('ch-positions-wrap');
+  const posList = el('ch-positions-list');
+  if (posWrap && posList) {
+    posWrap.style.display = positions.length > 0 ? 'block' : 'none';
+    if (positions.length > 0) {
+      posList.innerHTML = positions.map(p => {
+        const sym = (p.yahoo_sym || p.rithmic_sym || '—').replace('=F','');
+        const side = (p.side || 'BUY').toUpperCase();
+        const qty = p.qty || 1;
+        const fill = p.fill_price ? Number(p.fill_price).toFixed(2) : '—';
+        const sl = p.sl ? Number(p.sl).toFixed(2) : '—';
+        const tp = p.tp ? Number(p.tp).toFixed(2) : '—';
+        const mark = p.mark_price != null ? Number(p.mark_price).toFixed(2) : '…';
+        const upnl = p.unrealized_pnl_usd;
+        const upnlTxt = upnl != null
+          ? `${upnl >= 0 ? '+' : ''}$${Number(upnl).toFixed(2)}`
+          : '…';
+        const upnlCls = upnl == null ? 'wait' : upnl >= 0 ? 'pos' : 'neg';
+        return `<div class="live-pos-row">
+          <div class="lp-sym">${sym} ×${qty}</div>
+          <div class="${side==='BUY'?'lp-side-buy':'lp-side-sell'}">${side}</div>
+          <div class="lp-levels">
+            Entry ${fill}<br>SL ${sl} · TP ${tp}
+          </div>
+          <div class="lp-mark">Mark<br>${mark}</div>
+          <div class="lp-upnl ${upnlCls}">${upnlTxt}</div>
+        </div>`;
+      }).join('');
+    }
+  }
+}
+
+async function setTradingMode(mode) {
+  // Confirm before switching to LIVE
+  if (mode === 'live') {
+    const ok = confirm(
+      'Switch to LIVE mode?\n\n' +
+      'Real orders will be sent to your Lucid Rithmic account.\n' +
+      'Make sure your credentials are set in .env before confirming.'
+    );
+    if (!ok) return;
+  }
+
+  // Current state: if mode matches current, nothing to do
+  const currentlyLive = _challengeData.live_enabled === true;
+  if ((mode === 'live') === currentlyLive) return;
+
+  try {
+    const r = await fetch(`${API}/api/live/toggle`, {method:'POST'});
+    const d = await r.json();
+    if (d.ok) {
+      await fetchChallenge();
+    }
+  } catch(e) {
+    alert('Failed to toggle trading mode: ' + e.message);
+  }
+}
+
+async function fireTestSignal(){
+  const sym = String(document.getElementById('ts-symbol')?.value || 'RTY=F').trim();
+  const strategy = String(document.getElementById('ts-strategy')?.value || 'ORB').trim().toUpperCase();
+  const direction = String(document.getElementById('ts-direction')?.value || 'BUY').trim().toUpperCase();
+  const qtyRaw = String(document.getElementById('ts-qty')?.value || '1').trim();
+  const qty = Math.max(1, Math.min(parseInt(qtyRaw, 10) || 1, 50));
+
+  try{
+    const r = await fetch(`${API}/api/signal/test`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({symbol: sym, strategy, direction, qty}),
+    });
+    const j = await r.json().catch(()=> ({}));
+    if (!r.ok || j.ok === false){
+      setUiStatus(false, j?.error || `test signal failed: ${r.status}`);
+      return;
+    }
+    setUiStatus(true);
+    // If SIM: paper engine mirrors immediately; if LIVE: challenge positions will update asynchronously.
+    await fetchPaperState();
+    await fetchChallenge();
+  } catch(e){
+    setUiStatus(false, e?.message || String(e));
+  }
+}
+
+async function resetChallenge() {
+  if (!confirm('Reset challenge state? This clears all P&L and drawdown history.')) return;
+  await fetch(`${API}/api/challenge/reset`, {method:'POST'});
+  await fetchChallenge();
+}
+
 /* ── UPDATE UI ── */
 function updateUI() {
-  const bal = state.balance || 0;
-  const startBal = state.daily_start_balance || state.start_balance || bal;
-  const pnl = state.daily_pnl || 0;
+  const liveEnabled = _challengeData && _challengeData.live_enabled === true;
+  const paper = _paperData || {};
+
+  const bal = liveEnabled ? (state.balance || 0) : Number(paper.balance ?? state.balance ?? 0);
+  const startBal = liveEnabled
+    ? (state.daily_start_balance || state.start_balance || bal)
+    : Number(paper.daily_start_balance ?? paper.balance ?? state.daily_start_balance ?? state.start_balance ?? bal);
+  const pnl = liveEnabled ? (state.daily_pnl || 0) : Number(paper.daily_pnl ?? state.daily_pnl ?? 0);
   const pnlPct = startBal > 0 ? (pnl / startBal * 100) : 0;
-  const trades = state.trades || [];
+
+  const trades = (() => {
+    if (liveEnabled) return state.trades || [];
+    const pt = Array.isArray(paper.trades) ? paper.trades : [];
+    // Normalize paper trades to the format expected by renderTrades().
+    return pt.map(t => ({
+      symbol: t.symbol,
+      direction: String(t.side || 'BUY').toUpperCase(),
+      signal_type: (t.note || 'PAPER'),
+      entry: t.entry_price,
+      stop_loss: t.stop_loss,
+      pnl_usd: t.realized_pnl_usd,
+      status: 'CLOSED',
+      timestamp: t.closed_at || t.opened_at || Date.now(),
+    }));
+  })();
+
   const closed = trades.filter(t => t.status === 'CLOSED');
-  const wins = closed.filter(t => (t.pnl || 0) > 0).length;
-  const openPos = (state.open_positions || []).length;
+  const wins = closed.filter(t => ((t.pnl_usd ?? t.pnl) || 0) > 0).length;
+  const openPos = liveEnabled
+    ? (state.open_positions || []).length
+    : (Array.isArray(paper.positions) ? paper.positions.length : 0);
+
+  // Balance history for the small chart in both modes.
+  if (bal > 0) {
+    balanceHistory.push({t: Date.now(), v: bal});
+    if (balanceHistory.length > 120) balanceHistory.shift();
+  }
 
   /* balance */
   document.getElementById('balance').textContent = `$${bal.toFixed(2)}`;
@@ -1168,26 +1789,260 @@ function escHtml(v) {
     .replace(/'/g, '&#39;');
 }
 
-// TradingView SuperCharts URL per symbol (CME / CME_MINI)
-function tvUrl(sym) {
-  const base = _baseFromSymbol(sym);
-  const map = {
-    'ES':  'CME_MINI:ES1!',
-    'MES': 'CME_MINI:MES1!',
-    'NQ':  'CME_MINI:NQ1!',
-    'MNQ': 'CME_MINI:MNQ1!',
-    'RTY': 'CME_MINI:RTY1!',
-    'M2K': 'CME_MINI:M2K1!',
-    'GC':  'COMEX:GC1!',
-    'MGC': 'COMEX:MGC1!',
-    'SI':  'COMEX:SI1!',
-    'HG':  'COMEX:HG1!',
-    'CL':  'NYMEX:CL1!',
-    'MCL': 'NYMEX:MCL1!',
-  };
-  const tv = map[base] || `CME:${base}1!`;
-  return `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(tv)}`;
+/* ── THEME TOGGLE ── */
+function setTheme(t){
+  const v = (t === 'dark' || t === 'light') ? t : 'brown';
+  document.body.classList.toggle('theme-dark', v === 'dark');
+  document.body.classList.toggle('theme-light', v === 'light');
+  // brown = default (no extra class)
+  if (v === 'brown'){
+    document.body.classList.remove('theme-dark');
+    document.body.classList.remove('theme-light');
+  }
+  try{ localStorage.setItem('mf_theme', v); } catch {}
+  const sel = document.getElementById('theme-select');
+  if (sel) sel.value = v;
+  _applyChartTheme();
 }
+function initTheme(){
+  let v = 'brown';
+  try{ v = localStorage.getItem('mf_theme') || 'brown'; } catch {}
+  setTheme(v);
+}
+
+// ── CHART (Lightweight Charts) ──
+let __chart = null;
+let __candleSeries = null;
+let __volSeries = null;
+let __chartTf = '5m';
+let __chartSym = 'ES';
+let __priceLines = new Map(); // posId -> {entry, sl, tp}
+/** After user pans/zooms the paper chart, periodic candle refresh must not reset the viewport. */
+let __paperChartUserPanned = false;
+let __paperChartProgRange = false;
+let __lastPaperCandleSym = null;
+
+function _applyChartTheme(){
+  if (!__chart) return;
+  const bg = getComputedStyle(document.documentElement).getPropertyValue('--panel2').trim() || '#1a1513';
+  const text = getComputedStyle(document.documentElement).getPropertyValue('--text').trim() || '#eadfce';
+  const grid = getComputedStyle(document.documentElement).getPropertyValue('--border').trim() || '#3a312a';
+  __chart.applyOptions({
+    layout: { background: { type:'solid', color: bg }, textColor: text, fontFamily: 'Syne, sans-serif' },
+    grid: { vertLines: { color: grid }, horzLines: { color: grid } },
+    rightPriceScale: { borderColor: grid },
+    timeScale: { borderColor: grid, timeVisible: true, secondsVisible: false },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+  });
+  if (__volSeries){
+    __volSeries.applyOptions({
+      color: grid,
+    });
+  }
+}
+
+function initPaperChart(){
+  const el = document.getElementById('paper-chart');
+  if (!el || __chart) return;
+  __chart = LightweightCharts.createChart(el, {
+    height: el.clientHeight || 360,
+    autoSize: true,
+    rightPriceScale: { borderVisible: true, scaleMargins: { top: 0.08, bottom: 0.2 } },
+    timeScale: { timeVisible: true, secondsVisible: false, minBarSpacing: 0.12 },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+    handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
+    handleScale: { axisPressedMouseMove: { time: true, price: true }, mouseWheel: true, pinch: true },
+  });
+  __candleSeries = __chart.addCandlestickSeries({
+    upColor: 'rgba(124,202,163,1)',
+    downColor: 'rgba(224,112,112,1)',
+    borderUpColor: 'rgba(124,202,163,1)',
+    borderDownColor: 'rgba(224,112,112,1)',
+    wickUpColor: 'rgba(124,202,163,1)',
+    wickDownColor: 'rgba(224,112,112,1)',
+    priceLineVisible: false,
+    lastValueVisible: true,
+  });
+  try {
+    __chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+      if (__paperChartProgRange) return;
+      __paperChartUserPanned = true;
+    });
+  } catch {}
+  __volSeries = __chart.addHistogramSeries({
+    priceScaleId: '',
+    color: 'rgba(210,180,140,.35)',
+    priceFormat: { type: 'volume' },
+  });
+  __volSeries.priceScale().applyOptions({ scaleMargins: { top: 0.75, bottom: 0 } });
+  _applyChartTheme();
+}
+
+function _normSymbol(sym){
+  // Keep the full symbol for API calls (e.g. "ES=F"), but normalize casing/whitespace.
+  // Display helpers elsewhere can strip suffixes for readability.
+  return String(sym||'').toUpperCase().trim();
+}
+
+async function fetchCandles(sym, tf){
+  const timeframe = tf || __chartTf;
+  const raw = String(sym||'').toUpperCase().trim();
+  const candidates = [];
+  const push = (x)=>{ x=String(x||'').trim(); if(x && !candidates.includes(x)) candidates.push(x); };
+  push(raw);
+  // Fallbacks: try both base and futures suffix forms
+  if (raw.endsWith('=F')) push(raw.slice(0,-2));
+  else push(raw + '=F');
+  // Also accept accidental whitespace or lowercase already handled by normalize above.
+
+  let lastErr = null;
+  for (const s of candidates){
+    try{
+      const r = await fetch(`${API}/api/market/candles?symbol=${encodeURIComponent(s)}&tf=${encodeURIComponent(timeframe)}`);
+      if (!r.ok) {
+        lastErr = new Error(`candles ${r.status}`);
+        continue;
+      }
+      const j = await r.json();
+      if (j && j.ok && Array.isArray(j.candles) && j.candles.length) return j;
+      lastErr = new Error(j?.error ? String(j.error) : 'empty_candles');
+    } catch(e){
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error('candles_failed');
+}
+
+async function ensurePaperChart(sym){
+  initPaperChart();
+  const s = _normSymbol(sym || document.getElementById('paper-sym')?.value || 'ES');
+  __chartSym = s;
+  const st = document.getElementById('paper-chart-status');
+  const symChanged = __lastPaperCandleSym !== null && __lastPaperCandleSym !== s;
+  if (symChanged) __paperChartUserPanned = false;
+  __lastPaperCandleSym = s;
+  if (st) st.textContent = `${s} · ${__chartTf} · delayed OHLC (Yahoo bars — not tick tape)`;
+  try{
+    const data = await fetchCandles(s, __chartTf);
+    const candles = (data?.candles || []).map(c=>({
+      time: Number(c.time),
+      open: Number(c.open),
+      high: Number(c.high),
+      low: Number(c.low),
+      close: Number(c.close),
+    }));
+    const vols = (data?.candles || []).map(c=>({
+      time: Number(c.time),
+      value: Number(c.volume || 0),
+      color: (Number(c.close) >= Number(c.open)) ? 'rgba(124,202,163,.35)' : 'rgba(224,112,112,.35)',
+    }));
+    let savedVis = null;
+    if (__chart && __paperChartUserPanned && !symChanged) {
+      try { savedVis = __chart.timeScale().getVisibleRange(); } catch {}
+    }
+    __candleSeries.setData(candles);
+    __volSeries.setData(vols);
+    if (savedVis && __paperChartUserPanned && !symChanged) {
+      __paperChartProgRange = true;
+      try { __chart.timeScale().setVisibleRange(savedVis); } catch {}
+      queueMicrotask(() => { __paperChartProgRange = false; });
+    } else if (!__paperChartUserPanned || symChanged) {
+      __paperChartProgRange = true;
+      try{ __chart.timeScale().fitContent(); } catch {}
+      queueMicrotask(() => { __paperChartProgRange = false; });
+    }
+    _syncPositionLines();
+  } catch(e){
+    if (st) st.textContent = `${s} · ${__chartTf} · data error`;
+    setUiStatus(false, String(e?.message || e));
+  }
+}
+
+function initPaperTfSelect(){
+  const sel = document.getElementById('paper-tf-select');
+  if (!sel || sel.options.length) return;
+  const groups = [
+    {label:'Minutes', vals:[
+      ['1m','1 min'],['2m','2 min'],['3m','3 min (~5m bars)'],['5m','5 min'],['10m','10 min (~15m)'],['15m','15 min'],['20m','20 min (~30m)'],['30m','30 min'],['45m','45 min (hourly bars)']
+    ]},
+    {label:'Hours', vals:[
+      ['1h','1 hour'],['90m','90 min'],['2h','2 h (1h bars, zoom)'],['3h','3 h (1h bars)'],['4h','4 h (1h bars)'],['5h','5 h (1h bars)']
+    ]},
+    {label:'Days & longer', vals:[
+      ['1d','1 day'],['5d','5 days'],['1w','1 week'],['1mo','1 month'],['3mo','3 months'],['6mo','6 months'],['1y','1 year'],['2y','2 years'],['5y','5 years'],['10y','10 years / max']
+    ]},
+  ];
+  for (const g of groups){
+    const og = document.createElement('optgroup');
+    og.label = g.label;
+    for (const [v, lab] of g.vals){
+      const o = document.createElement('option');
+      o.value = v;
+      o.textContent = lab;
+      og.appendChild(o);
+    }
+    sel.appendChild(og);
+  }
+  sel.value = __chartTf;
+}
+
+function setPaperTf(tf){
+  const sel = document.getElementById('paper-tf-select');
+  const v = String(tf || sel?.value || '5m').trim();
+  const prev = __chartTf;
+  __chartTf = v;
+  if (sel && sel.value !== v) sel.value = v;
+  if (prev !== v) __paperChartUserPanned = false;
+  ensurePaperChart(__chartSym);
+}
+
+function _lineKey(posId, kind){ return `${posId}:${kind}`; }
+function _setLine(posId, kind, price, opts){
+  if (!__candleSeries) return;
+  const key = _lineKey(posId, kind);
+  let entry = __priceLines.get(key);
+  if (!entry){
+    const pl = __candleSeries.createPriceLine({ price, ...opts });
+    __priceLines.set(key, pl);
+  } else {
+    entry.applyOptions({ price, ...opts });
+  }
+}
+function _delLinesForPos(posId){
+  if (!__candleSeries) return;
+  for (const kind of ['ENTRY','SL','TP']){
+    const key = _lineKey(posId, kind);
+    const pl = __priceLines.get(key);
+    if (pl){
+      try{ __candleSeries.removePriceLine(pl); } catch {}
+      __priceLines.delete(key);
+    }
+  }
+}
+function _syncPositionLines(){
+  const positions = Array.isArray(__paper?.positions) ? __paper.positions : [];
+  const openIds = new Set(positions.map(p=>String(p.id||'')));
+  // remove lines for closed positions
+  for (const k of Array.from(__priceLines.keys())){
+    const posId = String(k.split(':')[0]||'');
+    if (posId && !openIds.has(posId)){
+      _delLinesForPos(posId);
+    }
+  }
+  for (const p of positions){
+    const id = String(p.id||'');
+    if (!id) continue;
+    const side = String(p.side||'BUY').toUpperCase();
+    const entry = Number(p.entry_price||0);
+    const sl = p.stop_loss==null ? null : Number(p.stop_loss);
+    const tp = p.take_profit==null ? null : Number(p.take_profit);
+    const entryCol = side === 'BUY' ? 'rgba(124,202,163,1)' : 'rgba(224,112,112,1)';
+    _setLine(id,'ENTRY',entry,{ color: entryCol, lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Solid, axisLabelVisible:true, title:'ENTRY' });
+    if (sl!=null) _setLine(id,'SL',sl,{ color: 'rgba(248,81,73,1)', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible:true, title:'SL' });
+    if (tp!=null) _setLine(id,'TP',tp,{ color: 'rgba(63,185,80,1)', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible:true, title:'TP' });
+  }
+}
+
 
 const sessionMeta = {
   kz:   {name:'KZ — Killzone',      time:'London 2–5AM ET / NY 8:30–11AM ET', desc:'Sweeps the Asia range then reverses'},
@@ -1290,7 +2145,9 @@ let __ignoredSymbols = [];
 
 let __mode = 'rank';
 function setMode(m){
-  __mode = (m === 'paper') ? 'paper' : 'rank';
+  const next = (m === 'paper') ? 'paper' : 'rank';
+  if (__mode === 'paper' && next !== 'paper') __paperRenderedSym = null;
+  __mode = next;
   const rank = document.getElementById('panel-rankings');
   const paper = document.getElementById('panel-paper');
   const tR = document.getElementById('tab-rank');
@@ -1300,11 +2157,12 @@ function setMode(m){
   if (tR) tR.className = 'mode-tab ' + (__mode === 'rank' ? 'on' : 'off');
   if (tP) tP.className = 'mode-tab ' + (__mode === 'paper' ? 'on' : 'off');
   document.body.classList.toggle('paper-mode', __mode === 'paper');
-  if (__mode === 'paper') fetchPaperState();
+  if (__mode === 'paper') { fetchPaperState(); ensurePaperChart(document.getElementById('paper-sym')?.value); }
 }
 
 /* ── PAPER TRADING (REAL) ── */
 let __paper = null;
+let __paperRenderedSym = null;
 function _fmtUsd(v){
   const n = Number(v || 0);
   const sign = n >= 0 ? '+' : '-';
@@ -1345,10 +2203,31 @@ function renderPaper(p){
   if (cEl) cEl.textContent = String(contracts);
 
   const symSel = document.getElementById('paper-sym');
-  if (symSel && Array.isArray(p?.symbols) && !symSel.__filled){
-    symSel.innerHTML = p.symbols.map(s=>`<option value="${escHtml(String(s))}">${escHtml(_symBase(s))}</option>`).join('');
-    symSel.__filled = true;
+  if (symSel && Array.isArray(p?.symbols)){
+    const prev = String(symSel.value || '');
+    const opts = p.symbols.map(s=>String(s));
+    symSel.innerHTML = opts.map(s=>`<option value="${escHtml(String(s))}">${escHtml(_symBase(s))}</option>`).join('');
+    // Keep selection if still valid; otherwise default to first symbol.
+    if (prev && opts.includes(prev)) symSel.value = prev;
+    else if (opts.length) symSel.value = opts[0];
+
+    if (!symSel.__wired){
+      symSel.__wired = true;
+      symSel.addEventListener('change', () => {
+        __paperRenderedSym = null;
+        ensurePaperChart(symSel.value);
+      });
+    }
   }
+
+  const symNow = symSel?.value;
+  if (symNow && symNow !== __paperRenderedSym) {
+    __paperRenderedSym = symNow;
+    ensurePaperChart(symNow);
+  } else {
+    _syncPositionLines();
+  }
+  try { if (__mode === 'paper') _recalcSheetMax(); } catch {}
 
   const posWrap = document.getElementById('paper-positions');
   if (posWrap){
@@ -1430,8 +2309,38 @@ async function fetchPaperState(){
   try{
     const r = await fetch(`${API}/api/paper/state`);
     const data = await r.json();
+    _paperData = data;
     renderPaper(data);
+    // Also refresh the top-line metrics in SIM mode.
+    updateUI();
   } catch(e) {}
+}
+
+async function fireTestSignal(){
+  const sym = String(document.getElementById('ts-symbol')?.value || 'RTY=F').trim();
+  const strategy = String(document.getElementById('ts-strategy')?.value || 'ORB').trim().toUpperCase();
+  const direction = String(document.getElementById('ts-direction')?.value || 'BUY').trim().toUpperCase();
+  const qty = parseInt(String(document.getElementById('ts-qty')?.value || '1').trim(), 10) || 1;
+  try{
+    const payload = {symbol: sym, strategy, direction, qty};
+    const r = await fetch(`${API}/api/signal/test`, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(payload),
+    });
+    const j = await r.json().catch(()=>({}));
+    if (!r.ok || j.ok === false){
+      setUiStatus(false, `test signal failed: ${j?.error || r.status}`);
+      return;
+    }
+    setUiStatus(true);
+    // Pull fresh paper/live state immediately so the metrics visibly move.
+    await fetchPaperState();
+    await fetchChallenge();
+    await fetchState();
+  } catch(e){
+    setUiStatus(false, `test signal failed: ${e?.message || String(e)}`);
+  }
 }
 
 async function paperSubmit(){
@@ -1689,9 +2598,6 @@ function openModal(sym){
   document.getElementById('m-trades').textContent = `${s.trades} backtest trades`;
   document.getElementById('m-img-wrap').innerHTML = imgEl(sym, 40);
   // Clicking logo OR symbol name opens TradingView (same tvUrl logic)
-  document.getElementById('m-img-wrap').onclick = () => window.open(tvUrl(sym), '_blank', 'noopener');
-  mSymEl.onclick = () => window.open(tvUrl(sym), '_blank', 'noopener');
-  mSymEl.title = 'Open TradingView';
   document.getElementById('m-img-wrap').className = 'modal-logo-btn';
 
   const vEl = document.getElementById('m-verdict');
@@ -1700,7 +2606,6 @@ function openModal(sym){
   document.getElementById('m-v-body').textContent = v.body;
 
   // TradingView button
-  document.getElementById('m-tv-btn').href = tvUrl(sym);
 
   const sessions = [
     {key:'kz',val:s.kz},{key:'orb',val:s.orb},
@@ -2152,15 +3057,173 @@ async function saveContact() {
   }
 }
 
+function openProfile(){
+  const o = document.getElementById('profile-overlay');
+  if (o) o.classList.add('show');
+  loadProfileForm();
+}
+function closeProfile(ev){
+  if (ev && ev.target !== ev.currentTarget) return;
+  closeProfileDirect();
+}
+function closeProfileDirect(){
+  const o = document.getElementById('profile-overlay');
+  if (o) o.classList.remove('show');
+}
+function loadProfileForm(){
+  let p = {};
+  try { p = JSON.parse(localStorage.getItem('mf_profile') || '{}'); } catch {}
+  const sim = document.getElementById('pf-auto-sim');
+  const live = document.getElementById('pf-auto-live');
+  const scr = document.getElementById('pf-scripts');
+  const dis = document.getElementById('pf-display');
+  if (sim) sim.checked = p.autoSim !== false;
+  if (live) live.checked = p.autoLive === true;
+  if (scr) scr.value = p.scriptNotes || '';
+  if (dis) dis.value = p.displayName || '';
+}
+function saveProfile(){
+  const p = {
+    autoSim: document.getElementById('pf-auto-sim')?.checked !== false,
+    autoLive: document.getElementById('pf-auto-live')?.checked === true,
+    scriptNotes: String(document.getElementById('pf-scripts')?.value || '').slice(0, 4000),
+    displayName: String(document.getElementById('pf-display')?.value || '').slice(0, 80),
+  };
+  try { localStorage.setItem('mf_profile', JSON.stringify(p)); } catch {}
+  const s = document.getElementById('pf-saved');
+  if (s) { s.textContent = 'Saved'; setTimeout(() => { s.textContent = ''; }, 2000); }
+}
+
+function _initPaperColResize(){
+  const sp = document.getElementById('paper-splitter');
+  const grid = document.getElementById('paper-grid');
+  if (!sp || !grid) return;
+  let dragging = false;
+  let startX = 0;
+  let startW = 380;
+  const readW = () => {
+    const cs = getComputedStyle(grid).getPropertyValue('--paper-col-w').trim();
+    const n = parseInt(cs, 10);
+    return Number.isFinite(n) ? n : 380;
+  };
+  sp.addEventListener('mousedown', (e) => {
+    if (!document.body.classList.contains('paper-mode')) return;
+    dragging = true;
+    startX = e.clientX;
+    startW = readW();
+    e.preventDefault();
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    const dx = startX - e.clientX;
+    const nw = Math.min(Math.max(startW + dx, 260), Math.min(window.innerWidth * 0.52, 720));
+    grid.style.setProperty('--paper-col-w', `${Math.round(nw)}px`);
+  });
+  window.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false;
+    try { localStorage.setItem('mf_paper_col_w', String(readW())); } catch {}
+  });
+  try {
+    const w = parseInt(localStorage.getItem('mf_paper_col_w') || '', 10);
+    if (Number.isFinite(w) && w >= 260) grid.style.setProperty('--paper-col-w', `${w}px`);
+  } catch {}
+}
+
 /* ── INIT ── */
+initTheme();
 initChartHover();
+initPaperTfSelect();
 fetchState();
 fetchRankings();
+fetchChallenge();
 loadContact();
 fetchPaperState();
+// default chart timeframe & initial load
+__chartTf = '5m';
+ensurePaperChart('ES');
 setInterval(fetchState, 5000);
 setInterval(fetchRankings, 30000);
-setInterval(()=>{ if (__mode === 'paper') fetchPaperState(); }, 2000);
+setInterval(fetchChallenge, 5000);
+setInterval(()=>{ if (!(_challengeData && _challengeData.live_enabled === true) || __mode === 'paper') fetchPaperState(); }, 2000);
+setInterval(()=>{ if (__mode === 'paper') ensurePaperChart(document.getElementById('paper-sym')?.value); }, 5000);
+
+// --- Mobile paper bottom-sheet drag (chart stays full screen) ---
+let __sheetY = 0; // translateY px (0 = peek, larger = drag sheet down)
+let __sheetMax = 0;
+
+function _applySheetY(){
+  const sheet = document.getElementById('paper-sheet');
+  if (!sheet) return;
+  const y = Math.max(0, Math.min(__sheetY, __sheetMax));
+  sheet.style.transform = `translateY(${y}px)`;
+}
+
+function _recalcSheetMax(){
+  const sheet = document.getElementById('paper-sheet');
+  if (!sheet) return;
+  const h = sheet.getBoundingClientRect().height || 0;
+  __sheetMax = Math.max(0, h - 44);
+  __sheetY = Math.max(0, Math.min(__sheetY, __sheetMax));
+  _applySheetY();
+}
+
+function _initPaperSheetDrag(){
+  const sheet = document.getElementById('paper-sheet');
+  const grab = document.getElementById('paper-sheet-grab');
+  if (!sheet || !grab) return;
+
+  try {
+    const raw = parseInt(String(sessionStorage.getItem('mf_paper_sheet_y') || '0'), 10);
+    if (!Number.isNaN(raw) && raw >= 0) __sheetY = raw;
+  } catch {}
+
+  let startY = 0;
+  let startSheet = 0;
+  let dragging = false;
+
+  const getY = (ev) => (ev.touches && ev.touches[0]) ? ev.touches[0].clientY : ev.clientY;
+
+  const onDown = (ev) => {
+    if (!document.body.classList.contains('paper-mode')) return;
+    dragging = true;
+    startY = getY(ev);
+    startSheet = __sheetY;
+    grab.style.cursor = 'grabbing';
+  };
+
+  const onMove = (ev) => {
+    if (!dragging) return;
+    const dy = getY(ev) - startY;
+    __sheetY = startSheet + dy;
+    _applySheetY();
+  };
+
+  const onUp = () => {
+    if (!dragging) return;
+    dragging = false;
+    grab.style.cursor = 'grab';
+    __sheetY = Math.max(0, Math.min(__sheetY, __sheetMax));
+    _applySheetY();
+    try { sessionStorage.setItem('mf_paper_sheet_y', String(__sheetY)); } catch {}
+  };
+
+  grab.addEventListener('mousedown', onDown);
+  window.addEventListener('mousemove', onMove);
+  window.addEventListener('mouseup', onUp);
+
+  grab.addEventListener('touchstart', onDown, {passive:true});
+  window.addEventListener('touchmove', onMove, {passive:true});
+  window.addEventListener('touchend', onUp, {passive:true});
+
+  window.addEventListener('resize', _recalcSheetMax);
+  setTimeout(_recalcSheetMax, 50);
+}
+
+// init once DOM is ready
+try { _initPaperSheetDrag(); } catch {}
+try { _initPaperColResize(); } catch {}
+
 </script>
 </body>
 </html>

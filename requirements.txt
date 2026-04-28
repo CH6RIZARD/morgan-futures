@@ -6,3 +6,4 @@ yfinance==0.2.48
 pandas==2.2.2
 tzdata>=2024.1
 numpy==2.0.2
+websockets>=12.0

@@ -16,6 +16,8 @@ load_dotenv(os.path.join(_REPO_ROOT, ".env"))
 
 from .notify import send_email, send_twilio_sms
 from .contact_store import load_contact, save_contact
+from .rithmic_executor import RithmicExecutor
+from .challenge_manager import ChallengeManager
 from .signals import (
     SYMBOLS,
     OHLC_INTERVAL_MINUTES,
@@ -35,6 +37,38 @@ from .signals import (
 
 ET = ZoneInfo("America/New_York")
 app = Flask(__name__)
+
+# ── Live trading (Rithmic) ─────────────────────────────────────────────────
+LIVE_TRADING_ENABLED = os.environ.get("LIVE_TRADING_ENABLED", "0").strip() == "1"
+TRADE_RISK_DOLLARS = float(os.environ.get("TRADE_RISK_DOLLARS", "200"))
+
+# Approved strategy+symbol combos for live execution (≥50% backtest win rate)
+_APPROVED_LIVE: set[tuple[str, str]] = {
+    ("RTY=F", "ORB"), ("ES=F",  "ORB"), ("MES=F", "ORB"),
+    ("YM=F",  "ORB"), ("MYM=F", "ORB"),
+    ("YM=F",  "LRNY"), ("MYM=F", "LRNY"),
+}
+
+_rithmic = RithmicExecutor()
+_challenge = ChallengeManager()
+
+
+def _rithmic_fill_callback(trade: dict) -> None:
+    """Invoked by RithmicExecutor when a live trade closes (SL or TP hit)."""
+    pnl = float(trade.get("pnl_usd", 0.0))
+    _challenge.record_trade(pnl)
+    log(
+        f"[LIVE] Closed {trade.get('yahoo_sym')} {trade.get('exit_reason')} "
+        f"pnl=${pnl:.2f}",
+        "EXECUTED",
+    )
+
+# Runtime live-trading override (None = use env var; True/False = UI toggle)
+_live_override: bool | None = None
+
+
+def _is_live_enabled() -> bool:
+    return _live_override if _live_override is not None else LIVE_TRADING_ENABLED
 
 DASHBOARD_DIR = os.path.join(os.path.dirname(__file__), "..", "dashboard")
 
@@ -75,21 +109,21 @@ _ranker_last_run_utc: str | None = None
 
 CONTRACT_SPECS: dict[str, dict] = {
     # Equity indices
-    "ES=F": {"tick_size": 0.25, "tick_value": 12.50},
-    "MES=F": {"tick_size": 0.25, "tick_value": 1.25},
-    "NQ=F": {"tick_size": 0.25, "tick_value": 5.00},
-    "MNQ=F": {"tick_size": 0.25, "tick_value": 0.50},
-    "RTY=F": {"tick_size": 0.10, "tick_value": 5.00},
-    "M2K=F": {"tick_size": 0.10, "tick_value": 0.50},
-    # Metals
-    "GC=F": {"tick_size": 0.10, "tick_value": 10.00},
-    "MGC=F": {"tick_size": 0.10, "tick_value": 1.00},
-    "SI=F": {"tick_size": 0.005, "tick_value": 25.00},
+    "ES": {"tick_size": 0.25, "tick_value": 12.50},
+    "NQ": {"tick_size": 0.25, "tick_value": 5.00},
+    "YM": {"tick_size": 1.0, "tick_value": 5.00},
+    "RTY": {"tick_size": 0.10, "tick_value": 5.00},
+    "MES": {"tick_size": 0.25, "tick_value": 1.25},
+    "MNQ": {"tick_size": 0.25, "tick_value": 0.50},
+    "MYM": {"tick_size": 1.0, "tick_value": 0.50},
     # Energy
-    "CL=F": {"tick_size": 0.01, "tick_value": 10.00},
-    "MCL=F": {"tick_size": 0.01, "tick_value": 1.00},
-    # Copper (approx; varies by venue)
-    "HG=F": {"tick_size": 0.0005, "tick_value": 12.50},
+    "CL": {"tick_size": 0.01, "tick_value": 10.00},
+    # Metals
+    "GC": {"tick_size": 0.10, "tick_value": 10.00},
+    "MGC": {"tick_size": 0.10, "tick_value": 1.00},
+    # Rates
+    "ZB": {"tick_size": 0.03125, "tick_value": 31.25},
+    "ZN": {"tick_size": 0.015625, "tick_value": 15.625},
 }
 
 _paper_lock = threading.RLock()
@@ -123,6 +157,35 @@ _mark_cache_lock = threading.Lock()
 _mark_cache: dict[str, dict] = {}
 
 
+
+
+def _mark_price_polygon(symbol: str) -> float | None:
+    sym = str(symbol or '').strip().upper()
+    if not sym:
+        return None
+    api_key = str(os.environ.get('POLYGON_API_KEY') or '').strip()
+    if not api_key:
+        return None
+    try:
+        contract = _polygon_contract_from_base(sym)
+    except Exception:
+        return None
+    url = f"{_POLYGON_BASE}/futures/vX/aggs/{contract}"
+    params = {"resolution": "1min", "limit": 5, "sort": "window_start.desc", "apiKey": api_key}
+    try:
+        r = requests.get(url, params=params, timeout=10)
+        if r.status_code != 200:
+            return None
+        j = r.json() or {}
+        rows = j.get('results') or []
+        for row in rows:
+            c = row.get('close')
+            if c is None:
+                continue
+            return float(c)
+    except Exception:
+        return None
+    return None
 def _mark_price_quick(symbol: str) -> float | None:
     """
     Fast mark price fetch via Yahoo chart endpoint.
@@ -174,7 +237,9 @@ def _mark_price(symbol: str) -> float | None:
             except Exception:
                 pass
 
-    px = _mark_price_quick(sym)
+    px = _mark_price_polygon(sym) if '=' not in sym else None
+    if px is None:
+        px = _mark_price_quick(sym)
     if px is None:
         # last resort (slower): existing live candles helper
         try:
@@ -194,8 +259,13 @@ def _spec(symbol: str) -> dict:
     return CONTRACT_SPECS.get(symbol, {"tick_size": 0.25, "tick_value": 1.0})
 
 
+def _contract_base(symbol: str) -> str:
+    s = str(symbol or "").strip().upper()
+    return s[:-2] if s.endswith("=F") else s
+
+
 def _pnl_usd(symbol: str, side: str, entry: float, mark: float, qty: int) -> float:
-    sp = _spec(symbol)
+    sp = _spec(_contract_base(symbol))
     tick_size = float(sp.get("tick_size") or 0.25)
     tick_value = float(sp.get("tick_value") or 1.0)
     if tick_size <= 0:
@@ -211,7 +281,7 @@ def _trail_stop(pos: dict, mark: float) -> None:
         trail_ticks = int(pos.get("trail_ticks") or 0)
         if trail_ticks <= 0:
             return
-        tick_size = float((_spec(pos["symbol"]).get("tick_size") or 0.25))
+        tick_size = float((_spec(_contract_base(str(pos.get("symbol") or ""))).get("tick_size") or 0.25))
         side = str(pos.get("side") or "BUY").upper()
         if side == "BUY":
             best = float(pos.get("best_mark") or mark)
@@ -249,6 +319,49 @@ def _close_position_locked(pos_id: str, exit_price: float, reason: str = "MANUAL
     _paper["trades"] = _paper["trades"][:2000]
     _paper_log(
         f"CLOSED {pos['symbol']} {pos['side']} x{pos['qty']} @ {exit_price} ({reason}) pnl=${pos['realized_pnl_usd']}",
+        "EXECUTED",
+    )
+    return pos
+
+
+def _paper_insert_open_position(
+    sym: str,
+    side: str,
+    qty: int,
+    sl_f: float | None,
+    tp_f: float | None,
+    trail_ticks: int,
+    *,
+    fill_price: float,
+    mark_hint: float | None,
+    note: str | None = None,
+) -> dict:
+    """Append an open paper position (caller must hold _paper_lock)."""
+    m = float(mark_hint) if mark_hint is not None else float(fill_price)
+    pos: dict = {
+        "id": uuid.uuid4().hex,
+        "symbol": sym,
+        "side": side,
+        "qty": int(qty),
+        "entry_price": round(float(fill_price), 6),
+        "mark_price": round(float(m), 6),
+        "stop_loss": round(sl_f, 6) if sl_f is not None else None,
+        "take_profit": round(tp_f, 6) if tp_f is not None else None,
+        "trail_ticks": trail_ticks if trail_ticks > 0 else None,
+        "best_mark": float(m),
+        "status": "OPEN",
+        "opened_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "unrealized_pnl_usd": 0.0,
+        "contract": _spec(_contract_base(sym)),
+    }
+    if note:
+        pos["note"] = str(note)
+    _paper.setdefault("positions", []).insert(0, pos)
+    _paper["positions"] = _paper["positions"][:200]
+    _paper_log(
+        f"OPEN {sym} {side} x{qty} @ {pos['entry_price']} SL={pos.get('stop_loss')} TP={pos.get('take_profit')} trail={pos.get('trail_ticks')}"
+        + (f" ({note})" if note else ""),
         "EXECUTED",
     )
     return pos
@@ -507,6 +620,66 @@ def ranker_loop() -> None:
         time.sleep(max(30.0, float(RANKER_INTERVAL_SEC)))
 
 
+def _maybe_execute_live(sig: dict) -> None:
+    """
+    Gate checks before sending a live order to Rithmic:
+    1. Strategy must be in the approved set (≥50% backtest win rate)
+    2. Challenge rules must allow more trading (DD / daily cap / target)
+    3. No existing open position on the same instrument
+    4. Position sized to TRADE_RISK_DOLLARS (~$200)
+    """
+    sym = sig.get("symbol", "")
+    strategy = str(sig.get("type", "")).upper()
+
+    if (sym, strategy) not in _APPROVED_LIVE:
+        return
+
+    allowed, reason = _challenge.can_trade()
+    if not allowed:
+        log(f"[LIVE] Trade blocked — {reason}", "WARN")
+        return
+
+    if _rithmic.has_open_position(sym):
+        log(f"[LIVE] Skipping {sym} — position already open", "WARN")
+        return
+
+    if not _rithmic.is_connected():
+        log("[LIVE] Rithmic not connected — order skipped", "WARN")
+        return
+
+    entry = float(sig.get("entry") or 0)
+    sl = float(sig.get("stop_loss") or 0)
+    tp = float(sig.get("take_profit") or 0)
+    if not entry or not sl or not tp:
+        return
+
+    spec = CONTRACT_SPECS.get(sym.replace("=F", ""), {"tick_size": 0.25, "tick_value": 1.0})
+    tick_size = float(spec.get("tick_size") or 0.25)
+    tick_value = float(spec.get("tick_value") or 1.0)
+    stop_ticks = abs(entry - sl) / tick_size
+    if stop_ticks <= 0:
+        return
+
+    risk_per_contract = stop_ticks * tick_value
+    qty = max(1, int(TRADE_RISK_DOLLARS / risk_per_contract))
+    qty = min(qty, 3)  # hard cap: never more than 3 contracts on a challenge
+
+    basket_id = _rithmic.place_bracket_order(
+        yahoo_sym=sym,
+        side=str(sig.get("direction", "BUY")).upper(),
+        qty=qty,
+        entry=entry,
+        sl=sl,
+        tp=tp,
+    )
+    if basket_id:
+        log(
+            f"[LIVE] Order placed: {strategy} {sig.get('direction')} {qty}x{sym} "
+            f"E={entry} SL={sl} TP={tp} basket={basket_id}",
+            "EXECUTED",
+        )
+
+
 def scanner_loop() -> None:
     while True:
         try:
@@ -576,6 +749,8 @@ def scanner_loop() -> None:
                         "SIGNAL",
                     )
                     _notify(sig)
+                    if _is_live_enabled():
+                        _maybe_execute_live(sig)
 
                 time.sleep(0.25)
 
@@ -607,6 +782,19 @@ def start_background_tasks() -> None:
             _ranker_log("Ranker thread started.", "SYSTEM")
         else:
             _ranker_log("Ranker disabled (set RANKER_ENABLED=1 to enable).", "SYSTEM")
+
+        if LIVE_TRADING_ENABLED:
+            _rithmic.start()
+            _rithmic.on_fill(_rithmic_fill_callback)
+            _rithmic.connect(
+                user=os.environ.get("RITHMIC_USER", ""),
+                password=os.environ.get("RITHMIC_PASSWORD", ""),
+                system_name=os.environ.get("RITHMIC_SYSTEM_NAME", ""),
+                gateway_uri=os.environ.get("RITHMIC_GATEWAY_URI", ""),
+            )
+            log("Rithmic live trading enabled — connecting...", "SYSTEM")
+        else:
+            log("Live trading DISABLED (set LIVE_TRADING_ENABLED=1 to enable).", "SYSTEM")
 
 
 @app.before_request
@@ -678,6 +866,23 @@ def get_state():
         },
         "qualifying_for_trade": len(SYMBOLS),
     }
+
+    # Main dashboard metrics are powered by /api/state.
+    # When live trading is disabled, surface internal paper engine balances/positions here
+    # so "SIM" test signals visibly change Balance / P&L / Positions in the top row.
+    try:
+        with _paper_lock:
+            bal = float(_paper.get("balance") or 0.0)
+            d0 = float(_paper.get("daily_start_balance") or bal)
+            start_bal = float(_paper.get("starting_balance") or 0.0)
+            base["balance"] = bal
+            base["daily_start_balance"] = d0
+            base["start_balance"] = start_bal or d0 or bal
+            base["daily_pnl"] = round(bal - d0, 2)
+            base["open_positions"] = list(_paper.get("positions") or [])
+            base["trades"] = list(_paper.get("trades") or [])[:500]
+    except Exception:
+        pass
 
     out = {**base, **state}
     with _rankings_lock:
@@ -935,6 +1140,157 @@ def set_contact():
     return jsonify({"ok": True, "email": c.email, "phone_e164": c.phone_e164})
 
 
+@app.route("/api/challenge")
+def challenge_state():
+    """Current Lucid challenge progress: balance, drawdown, consistency, status."""
+    summary = _challenge.status_summary()
+    summary["rithmic_connected"] = _rithmic.is_connected()
+    summary["live_enabled"] = _is_live_enabled()
+
+    # Enrich open positions with current mark price + unrealized P&L
+    positions = []
+    for pos in _rithmic.get_positions().values():
+        p = dict(pos)
+        yahoo_sym = p.get("yahoo_sym", "")
+        fill_price = float(p.get("fill_price") or p.get("entry", 0))
+        side = str(p.get("side", "BUY")).upper()
+        qty = int(p.get("qty", 1))
+        mark = _mark_price(yahoo_sym) if yahoo_sym else None
+        if mark is not None:
+            p["mark_price"] = round(mark, 4)
+            p["unrealized_pnl_usd"] = round(
+                _pnl_usd(yahoo_sym.replace("=F", ""), side, fill_price, mark, qty), 2
+            )
+        else:
+            p["mark_price"] = None
+            p["unrealized_pnl_usd"] = None
+        positions.append(p)
+
+    summary["open_positions"] = positions
+    return jsonify(summary)
+
+
+@app.route("/api/challenge/reset", methods=["POST"])
+def challenge_reset():
+    """Reset challenge state to starting conditions. Admin/testing use only."""
+    _challenge.reset()
+    return jsonify({"ok": True, "message": "Challenge state reset to starting conditions"})
+
+
+@app.route("/api/live/toggle", methods=["POST"])
+def live_toggle():
+    """Toggle live trading on/off at runtime without restarting the server."""
+    global _live_override
+    _live_override = not _is_live_enabled()
+    if _live_override:
+        # Ensure Rithmic is started and connected when switching to live
+        if not _rithmic.is_connected():
+            _rithmic.start()
+            _rithmic.on_fill(_rithmic_fill_callback)
+            _rithmic.connect(
+                user=os.environ.get("RITHMIC_USER", ""),
+                password=os.environ.get("RITHMIC_PASSWORD", ""),
+                system_name=os.environ.get("RITHMIC_SYSTEM_NAME", ""),
+                gateway_uri=os.environ.get("RITHMIC_GATEWAY_URI", ""),
+            )
+        log("Live trading ENABLED via UI toggle", "SYSTEM")
+    else:
+        log("Live trading DISABLED via UI toggle (SIM mode)", "SYSTEM")
+    return jsonify({"ok": True, "live_enabled": _is_live_enabled()})
+
+
+@app.route("/api/signal/test", methods=["POST"])
+def fire_test_signal():
+    """
+    Inject a fake signal into the system to verify the Rithmic connection.
+    In SIM mode: logs only. In LIVE mode: sends a real bracket order to Rithmic.
+    Body params: symbol, strategy, direction, entry, sl, tp
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    sym = str(data.get("symbol") or "RTY=F").strip()
+    strategy = str(data.get("strategy") or "ORB").strip().upper()
+    direction = str(data.get("direction") or "BUY").strip().upper()
+
+    if sym not in SYMBOLS:
+        return jsonify({"ok": False, "error": f"Unknown symbol: {sym}"}), 400
+    if direction not in ("BUY", "SELL"):
+        return jsonify({"ok": False, "error": "direction must be BUY or SELL"}), 400
+
+    # Try to get entry from request; auto-calculate from mark price if not provided
+    try:
+        entry = float(data.get("entry") or 0)
+    except Exception:
+        entry = 0.0
+    try:
+        sl_val = float(data.get("sl") or 0)
+    except Exception:
+        sl_val = 0.0
+    try:
+        tp_val = float(data.get("tp") or 0)
+    except Exception:
+        tp_val = 0.0
+
+    if not entry:
+        mark = _mark_price(sym)
+        if mark is None:
+            return jsonify({"ok": False, "error": "no_market_data — cannot auto-fill entry price"}), 503
+        spec = _spec(sym.replace("=F", ""))
+        tick_size = float(spec.get("tick_size") or 0.25)
+        entry = round(float(mark), 4)
+        if direction == "BUY":
+            sl_val = round(entry - 40 * tick_size, 4)
+            tp_val = round(entry + 66 * tick_size, 4)   # ~1.65R
+        else:
+            sl_val = round(entry + 40 * tick_size, 4)
+            tp_val = round(entry - 66 * tick_size, 4)
+
+    rr = abs(tp_val - entry) / abs(entry - sl_val) if abs(entry - sl_val) > 0 else 1.0
+    sig = {
+        "symbol": sym,
+        "type": strategy,
+        "direction": direction,
+        "entry": entry,
+        "stop_loss": sl_val,
+        "take_profit": tp_val,
+        "rr": round(rr, 2),
+        "time": int(time.time()),
+        "time_et": datetime.now(ET).strftime("%Y-%m-%d %H:%M"),
+        "test_signal": True,
+    }
+
+    # Always surface in the UI signal feed
+    state["recent_signals"].insert(0, sig)
+    state["recent_signals"] = state["recent_signals"][:200]
+    log(f"[TEST] {strategy} {direction} {sym} E={entry} SL={sl_val} TP={tp_val}", "SIGNAL")
+
+    mode = "LIVE" if _is_live_enabled() else "SIM"
+    paper_pos: dict | None = None
+    if _is_live_enabled():
+        _maybe_execute_live(sig)
+    else:
+        # Mirror into internal paper engine so P&L / SL / TP can be exercised without Rithmic.
+        try:
+            tqty = int(data.get("qty") or 1)
+            tqty = max(1, min(tqty, 50))
+            mkt = _mark_price(sym)
+            with _paper_lock:
+                paper_pos = _paper_insert_open_position(
+                    sym,
+                    direction,
+                    tqty,
+                    sl_val,
+                    tp_val,
+                    0,
+                    fill_price=float(entry),
+                    mark_hint=float(mkt) if mkt is not None else float(entry),
+                    note="TEST_SIGNAL",
+                )
+        except Exception as e:
+            log(f"test signal paper mirror failed: {e}", "ERROR")
+
+    return jsonify({"ok": True, "mode": mode, "signal": sig, "paper_position": paper_pos})
+
+
 @app.route("/api/paper/state")
 def paper_state():
     with _paper_lock:
@@ -983,30 +1339,16 @@ def paper_order():
     except Exception:
         tp_f = None
 
-    pos = {
-        "id": uuid.uuid4().hex,
-        "symbol": sym,
-        "side": side,
-        "qty": qty,
-        "entry_price": round(float(mark), 6),
-        "mark_price": round(float(mark), 6),
-        "stop_loss": round(sl_f, 6) if sl_f is not None else None,
-        "take_profit": round(tp_f, 6) if tp_f is not None else None,
-        "trail_ticks": trail_ticks if trail_ticks > 0 else None,
-        "best_mark": float(mark),
-        "status": "OPEN",
-        "opened_at": datetime.now(timezone.utc).isoformat(),
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-        "unrealized_pnl_usd": 0.0,
-        "contract": _spec(sym),
-    }
-
     with _paper_lock:
-        _paper.setdefault("positions", []).insert(0, pos)
-        _paper["positions"] = _paper["positions"][:200]
-        _paper_log(
-            f"OPEN {sym} {side} x{qty} @ {pos['entry_price']} SL={pos.get('stop_loss')} TP={pos.get('take_profit')} trail={pos.get('trail_ticks')}",
-            "EXECUTED",
+        pos = _paper_insert_open_position(
+            sym,
+            side,
+            qty,
+            sl_f,
+            tp_f,
+            trail_ticks,
+            fill_price=float(mark),
+            mark_hint=float(mark),
         )
 
     return jsonify({"ok": True, "position": pos})
@@ -1034,6 +1376,243 @@ def paper_close():
     return jsonify({"ok": True, "trade": closed})
 
 
+# =====================
+# MARKET DATA (Polygon Futures)
+# =====================
+
+_POLYGON_BASE = "https://api.polygon.io"
+
+_MONTH_CODE = {
+    1: "F",
+    2: "G",
+    3: "H",
+    4: "J",
+    5: "K",
+    6: "M",
+    7: "N",
+    8: "Q",
+    9: "U",
+    10: "V",
+    11: "X",
+    12: "Z",
+}
+
+_QUARTERLY_MONTHS = (3, 6, 9, 12)
+
+
+def _next_cycle_month(now_et: datetime, cycle_months: tuple[int, ...]) -> tuple[int, int]:
+    """Return (month, year) for the next active contract month in a cycle."""
+    m = int(now_et.month)
+    y = int(now_et.year)
+    # Simple roll heuristic: after mid-month, prefer next cycle month.
+    if int(now_et.day) >= 16:
+        m += 1
+        if m == 13:
+            m = 1
+            y += 1
+
+    for cm in cycle_months:
+        if cm >= m:
+            return cm, y
+    return int(cycle_months[0]), y + 1
+
+
+def _polygon_contract_from_base(base: str) -> str:
+    """Map a base symbol (ES, NQ, CL, GC, etc) to a Polygon futures contract ticker."""
+    b = str(base or "").strip().upper()
+    if not b:
+        raise ValueError("missing base")
+
+    now_et = datetime.now(ET)
+
+    # Indices + rates tend to be quarterly.
+    if b in {"ES", "NQ", "YM", "RTY", "ZB", "ZN", "MES", "MNQ", "MYM"}:
+        month, year = _next_cycle_month(now_et, _QUARTERLY_MONTHS)
+    else:
+        # Metals / energy: allow monthly.
+        month, year = _next_cycle_month(now_et, tuple(range(1, 13)))
+
+    code = _MONTH_CODE[int(month)]
+    yy = str(year)[-1]
+    return f"{b}{code}{yy}"
+
+
+def _tf_to_polygon_resolution(tf: str) -> str:
+    t = str(tf or "5m").strip().lower()
+    if t in ("1m", "1min", "1minute"):
+        return "1min"
+    if t in ("5m", "5min", "5minute"):
+        return "5min"
+    if t in ("30m", "30min", "30minute"):
+        return "30min"
+    if t in ("1h", "60m", "1hour"):
+        return "1hour"
+    # default
+    return "5min"
+
+
+def _ns_to_epoch_seconds(v: int) -> int:
+    # Polygon futures uses nanoseconds in window_start.
+    # Guard in case of ms.
+    if v > 10_000_000_000_000:  # > 1e13
+        return int(v // 1_000_000_000)
+    return int(v // 1000)
+
+
+@app.route("/api/market/candles")
+def api_market_candles():
+    base = str(request.args.get("symbol") or "").strip().upper()
+    tf = str(request.args.get("tf") or "5m").strip().lower()
+    limit = int(request.args.get("limit") or 600)
+    limit = max(50, min(limit, 5000))
+    if not base:
+        return jsonify({"ok": False, "error": "missing_symbol"}), 400
+    cache = app.config.setdefault("_yahoo_candles_cache", {})
+    ttl_sec = float(os.environ.get("CANDLES_CACHE_TTL_SEC", "20"))
+    key = (base, tf, limit)
+    import time as _time
+    now = _time.time()
+    hit = cache.get(key)
+    if hit and (now - float(hit.get("t") or 0)) < ttl_sec:
+        return jsonify(hit.get("v"))
+
+    def _yahoo_chart_params(x: str) -> tuple[str, str]:
+        """Map UI timeframe to Yahoo `interval` + `range` (best-effort; Yahoo has no true tick tape)."""
+        x = str(x or "5m").strip().lower()
+        # Intraday minutes (Yahoo: 1m,2m,5m,15m,30m,60m,90m — others map to nearest).
+        if x in ("1m", "1min", "1minute"):
+            return "1m", os.environ.get("YF_RANGE_1M", "5d")
+        if x in ("2m", "2min"):
+            return "2m", os.environ.get("YF_RANGE_2M", "30d")
+        if x in ("3m", "3min", "4m", "4min"):
+            return "5m", os.environ.get("YF_RANGE_5M", "60d")
+        if x in ("5m", "5min", "5minute"):
+            return "5m", os.environ.get("YF_RANGE_5M", "60d")
+        if x in ("10m", "10min"):
+            return "15m", os.environ.get("YF_RANGE_15M", "60d")
+        if x in ("15m", "15min", "15minute"):
+            return "15m", os.environ.get("YF_RANGE_15M", "60d")
+        if x in ("20m", "20min"):
+            return "30m", os.environ.get("YF_RANGE_30M", "60d")
+        if x in ("30m", "30min", "30minute"):
+            return "30m", os.environ.get("YF_RANGE_30M", "60d")
+        if x in ("45m", "45min"):
+            return "60m", os.environ.get("YF_RANGE_1H", "730d")
+        # Hours
+        if x in ("1h", "60m", "1hour"):
+            return "60m", os.environ.get("YF_RANGE_1H", "730d")
+        if x in ("90m", "90min", "1h30m"):
+            return "90m", os.environ.get("YF_RANGE_90M", "730d")
+        if x in ("2h", "120m", "2hour", "3h", "180m", "4h", "240m", "4hour", "5h", "300m"):
+            # Yahoo has no 2–5h bar; hourly bars — zoom on chart for “feel”.
+            return "1h", os.environ.get("YF_RANGE_MULTIH", "2y")
+        # Days / weeks / months / years (aggregated OHLC, not ticks)
+        if x in ("1d", "1day", "d", "day"):
+            return "1d", os.environ.get("YF_RANGE_1D", "5y")
+        if x in ("5d", "5day"):
+            return "5d", os.environ.get("YF_RANGE_5D", "5y")
+        if x in ("1w", "1wk", "week", "weekly"):
+            return "1wk", os.environ.get("YF_RANGE_1W", "5y")
+        if x in ("1mo", "1mth", "1month", "monthly"):
+            return "1mo", os.environ.get("YF_RANGE_1MO", "max")
+        if x in ("3mo", "3mth", "quarter"):
+            return "3mo", os.environ.get("YF_RANGE_3MO", "max")
+        if x in ("6mo", "6mth"):
+            return "3mo", os.environ.get("YF_RANGE_6MO", "max")
+        if x in ("1y", "12mo", "1yr"):
+            return "1mo", os.environ.get("YF_RANGE_1Y", "10y")
+        if x in ("2y", "24mo"):
+            return "1mo", os.environ.get("YF_RANGE_2Y", "max")
+        if x in ("5y", "5yr"):
+            return "3mo", os.environ.get("YF_RANGE_5Y", "max")
+        if x in ("10y", "10yr", "max"):
+            return "3mo", "max"
+        return "5m", os.environ.get("YF_RANGE_5M", "60d")
+
+    def tf_to_interval(x: str) -> str:
+        return _yahoo_chart_params(x)[0]
+
+    def tf_to_range(x: str) -> str:
+        return _yahoo_chart_params(x)[1]
+
+    def candidates(sym: str) -> list[str]:
+        sym = str(sym or "").strip().upper()
+        out: list[str] = []
+
+        def push(v: str) -> None:
+            v = str(v or "").strip().upper()
+            if v and v not in out:
+                out.append(v)
+
+        push(sym)
+        if sym.endswith("=F"):
+            push(sym[:-2])
+        else:
+            push(sym + "=F")
+        return out
+
+    def fetch_chart(sym: str) -> list[dict]:
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}"
+        params = {
+            "range": tf_to_range(tf),
+            "interval": tf_to_interval(tf),
+            "includePrePost": "false",
+            "events": "div|split|earn",
+        }
+        headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json,text/plain,*/*"}
+        import requests as _requests
+
+        r = _requests.get(url, params=params, headers=headers, timeout=20)
+        r.raise_for_status()
+        j = r.json() or {}
+        res0 = (((j.get("chart") or {}).get("result") or [None])[0]) or {}
+        ts = res0.get("timestamp") or []
+        ind = (((res0.get("indicators") or {}).get("quote") or [None])[0]) or {}
+        o = ind.get("open") or []
+        hi = ind.get("high") or []
+        lo = ind.get("low") or []
+        cl = ind.get("close") or []
+        vol = ind.get("volume") or []
+        out: list[dict] = []
+        for i, t0 in enumerate(ts):
+            try:
+                oo, hh, ll, cc = o[i], hi[i], lo[i], cl[i]
+                if oo is None or hh is None or ll is None or cc is None:
+                    continue
+                out.append(
+                    {
+                        "time": int(t0),
+                        "open": float(oo),
+                        "high": float(hh),
+                        "low": float(ll),
+                        "close": float(cc),
+                        "volume": float(vol[i]) if i < len(vol) and vol[i] is not None else 0.0,
+                    }
+                )
+            except Exception:
+                continue
+        return out
+
+    last = None
+    candles: list[dict] = []
+    resolved = None
+    for sym in candidates(base):
+        try:
+            rows = fetch_chart(sym)
+            if rows:
+                candles = rows[-limit:]
+                resolved = sym
+                break
+            last = "empty"
+        except Exception as e:
+            last = str(e)
+
+    if not candles:
+        return jsonify({"ok": False, "error": "no_data", "details": last, "symbol": base, "tf": tf}), 502
+
+    out = {"ok": True, "symbol": base, "resolved": resolved, "tf": tf, "candles": candles}
+    cache[key] = {"t": now, "v": out}
+    return jsonify(out)
 if __name__ == "__main__":
     start_background_tasks()
     # Threaded dev server so background ranker/paper loops don't starve HTTP handlers.

@@ -61,27 +61,32 @@ def _local_tail_bar_count(days: int, interval: int = OHLC_INTERVAL_MINUTES) -> i
 # CME futures universe (mini + micro where available) using Yahoo Finance futures tickers.
 # These are SIGNALS ONLY (no auto-trading).
 SYMBOLS = [
-    # Equity index futures
-    "ES=F",   # E-mini S&P 500
-    "MES=F",  # Micro E-mini S&P 500
-    "NQ=F",   # E-mini Nasdaq-100
-    "MNQ=F",  # Micro E-mini Nasdaq-100
-    "RTY=F",  # E-mini Russell 2000
-    "M2K=F",  # Micro E-mini Russell 2000
-    # Metals
-    "GC=F",   # Gold
-    "MGC=F",  # Micro Gold
-    "SI=F",   # Silver
-    "SIL=F",  # Micro Silver (Yahoo listing dependent)
-    "HG=F",   # Copper
+    "ES=F",
+    "NQ=F",
+    "YM=F",
+
     # Energy
-    "CL=F",   # Crude Oil
-    "MCL=F",  # Micro Crude Oil
+    "CL=F",
+
+    # Metals
+    "GC=F",  # Gold
+    "SI=F",  # Silver
+    "HG=F",  # Copper
+
+    # Minis/micros
+    "MGC=F",
+    "MYM=F",
+    "MES=F",
+    "MNQ=F",
+    "RTY=F",
+
+    # Rates
+    "ZB=F",
 ]
 
 _env_syms = os.environ.get("BOT_SYMBOLS", "").strip()
 if _env_syms:
-    SYMBOLS = [s.strip() for s in _env_syms.split(",") if s.strip()]
+    SYMBOLS = [s.strip().upper() for s in _env_syms.split(',') if s.strip()]
 
 # =====================
 # DATA FETCHING ? FIX 1 — FIX 1
