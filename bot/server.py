@@ -804,7 +804,10 @@ def _lazy_start_background() -> None:
 
 @app.route("/")
 def dashboard():
-    return send_from_directory(DASHBOARD_DIR, "index.html")
+    # Ensure dashboard updates propagate immediately (Railway/CDN + browser can cache aggressively).
+    resp = send_from_directory(DASHBOARD_DIR, "index.html", max_age=0)
+    resp.headers["Cache-Control"] = "no-store, max-age=0"
+    return resp
 
 
 @app.route("/health")
