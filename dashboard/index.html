@@ -1259,17 +1259,22 @@ window.addEventListener('unhandledrejection', (e) => {
 async function fetchState() {
   try {
     const r = await fetch(`${API}/api/state`);
+    if (!r.ok) throw new Error(`/api/state ${r.status}`);
     state = await r.json();
     updateUI();
-  } catch(e) { console.error(e); }
+  } catch(e) {
+    console.error(e);
+    try { setUiStatus(false, `state fetch failed: ${e?.message || String(e)}`); } catch {}
+  }
 }
 
 async function fetchRankings() {
   try {
     const r = await fetch(`${API}/api/rankings`);
+    if (!r.ok) throw new Error(`/api/rankings ${r.status}`);
     const data = await r.json();
     renderRankings(data);
-  } catch(e) {}
+  } catch(e) { try { setUiStatus(false, `rankings fetch failed: ${e?.message || String(e)}`); } catch {} }
 }
 
 /* ── CHALLENGE + CONTROL CENTER ── */
@@ -1278,9 +1283,10 @@ let _challengeData = {};
 async function fetchChallenge() {
   try {
     const r = await fetch(`${API}/api/challenge`);
+    if (!r.ok) throw new Error(`/api/challenge ${r.status}`);
     _challengeData = await r.json();
     renderChallenge(_challengeData);
-  } catch(e) {}
+  } catch(e) { try { setUiStatus(false, `challenge fetch failed: ${e?.message || String(e)}`); } catch {} }
 }
 
 function renderChallenge(d) {
@@ -1561,24 +1567,36 @@ function updateUI() {
   }
 
   /* balance */
-  document.getElementById('balance').textContent = balN == null ? '$—' : `$${balN.toFixed(2)}`;
-  document.getElementById('balance').className = 'mval';
-  document.getElementById('balance-sub').textContent = startN == null ? 'Start: —' : `Start: $${startN.toFixed(2)}`;
+  const balEl = document.getElementById('balance');
+  if (balEl) {
+    balEl.textContent = balN == null ? '$—' : `$${balN.toFixed(2)}`;
+    balEl.className = 'mval';
+  }
+  const balSub = document.getElementById('balance-sub');
+  if (balSub) balSub.textContent = startN == null ? 'Start: —' : `Start: $${startN.toFixed(2)}`;
 
   /* pnl */
   const pnlEl = document.getElementById('daily-pnl');
-  pnlEl.textContent = pnlN == null ? '$—' : `${pnlN >= 0 ? '+' : ''}$${pnlN.toFixed(2)}`;
-  pnlEl.className = 'mval ' + (pnlN == null ? '' : (pnlN >= 0 ? 'green' : 'red'));
-  document.getElementById('daily-pnl-pct').textContent = (Number.isFinite(pnlPct) ? `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(3)}% today` : '—');
+  if (pnlEl) {
+    pnlEl.textContent = pnlN == null ? '$—' : `${pnlN >= 0 ? '+' : ''}$${pnlN.toFixed(2)}`;
+    pnlEl.className = 'mval ' + (pnlN == null ? '' : (pnlN >= 0 ? 'green' : 'red'));
+  }
+  const pnlPctEl = document.getElementById('daily-pnl-pct');
+  if (pnlPctEl) pnlPctEl.textContent = (Number.isFinite(pnlPct) ? `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(3)}% today` : '—');
 
   /* positions */
-  document.getElementById('open-pos').textContent = openPos;
-  document.getElementById('open-pos-bar').textContent = openPos;
+  const opEl = document.getElementById('open-pos');
+  if (opEl) opEl.textContent = openPos;
+  const opbEl = document.getElementById('open-pos-bar');
+  if (opbEl) opbEl.textContent = openPos;
 
   /* trades */
-  document.getElementById('total-trades').textContent = trades.length;
-  document.getElementById('trade-count').textContent = `${trades.length} trades`;
-  document.getElementById('win-rate').textContent = closed.length > 0 ? `Win rate: ${Math.round(wins/closed.length*100)}%` : 'Win rate: —';
+  const ttEl = document.getElementById('total-trades');
+  if (ttEl) ttEl.textContent = trades.length;
+  const tcEl = document.getElementById('trade-count');
+  if (tcEl) tcEl.textContent = `${trades.length} trades`;
+  const wrEl = document.getElementById('win-rate');
+  if (wrEl) wrEl.textContent = closed.length > 0 ? `Win rate: ${Math.round(wins/closed.length*100)}%` : 'Win rate: —';
 
   /* daily target */
   const targetAmt = startBal * 0.006;
@@ -1599,15 +1617,18 @@ function updateUI() {
   /* toggle */
   const btn = document.getElementById('toggle-btn');
   const txt = document.getElementById('status-text');
-  btn.className = 'pill ' + (state.trading_enabled ? 'active' : 'paused');
-  txt.textContent = state.trading_enabled ? 'Active' : 'Paused';
+  if (btn) btn.className = 'pill ' + (state.trading_enabled ? 'active' : 'paused');
+  if (txt) txt.textContent = state.trading_enabled ? 'Active' : 'Paused';
 
   /* scanner */
-  document.getElementById('scanner-status').textContent = state.scanner_status || '—';
+  const scEl = document.getElementById('scanner-status');
+  if (scEl) scEl.textContent = state.scanner_status || '—';
   const krOk = (state.diagnostics && state.diagnostics.kraken_balance_ok);
   const krErr = (state.diagnostics && state.diagnostics.kraken_balance_error);
   const krEl = document.getElementById('kraken-status');
-  if (krOk === false) {
+  if (!krEl) {
+    // no-op
+  } else if (krOk === false) {
     krEl.textContent = 'DISCONNECTED';
     krEl.style.color = '#e05555';
     krEl.title = Array.isArray(krErr) ? krErr.join(', ') : (krErr || '');
@@ -1620,7 +1641,8 @@ function updateUI() {
     krEl.style.color = '';
     krEl.title = '';
   }
-  document.getElementById('last-scan').textContent = state.last_scan ? new Date(state.last_scan).toLocaleTimeString() : '—';
+  const lsEl = document.getElementById('last-scan');
+  if (lsEl) lsEl.textContent = state.last_scan ? new Date(state.last_scan).toLocaleTimeString() : '—';
   // Match the bot's actual qualifier (MIN_WINRATE + expectancy >= 0 + total >= 3 on any leg)
   const minWR = (state.diagnostics?.min_winrate ?? 66);
   const minEx = (state.diagnostics?.min_expectancy ?? 0);
@@ -1630,7 +1652,8 @@ function updateUI() {
     : Object.values(state.symbol_rankings || {}).filter(s =>
         legQualifies(s.KZ) || legQualifies(s.ORB) || legQualifies(s.ASHL) || legQualifies(s.LRNY)
       ).length;
-  document.getElementById('qualified-count').textContent = qualified;
+  const qEl = document.getElementById('qualified-count');
+  if (qEl) qEl.textContent = qualified;
 
   /* session */
   const now = new Date();
@@ -2366,12 +2389,14 @@ function renderPaper(p){
 async function fetchPaperState(){
   try{
     const r = await fetch(`${API}/api/paper/state`);
+    if (!r.ok) throw new Error(`/api/paper/state ${r.status}`);
     const data = await r.json();
     _paperData = data;
     renderPaper(data);
     // Also refresh the top-line metrics in SIM mode.
     updateUI();
-  } catch(e) {}
+    try { setUiStatus(true); } catch {}
+  } catch(e) { try { setUiStatus(false, `paper fetch failed: ${e?.message || String(e)}`); } catch {} }
 }
 
 async function paperSubmit(){
@@ -3165,11 +3190,11 @@ function _initPaperColResize(){
 initTheme();
 initChartHover();
 initPaperTfSelect();
-fetchState();
-fetchRankings();
-fetchChallenge();
-loadContact();
-fetchPaperState();
+try { fetchState(); } catch(e) { try { setUiStatus(false, `init fetchState failed: ${e?.message || String(e)}`); } catch {} }
+try { fetchRankings(); } catch(e) { try { setUiStatus(false, `init fetchRankings failed: ${e?.message || String(e)}`); } catch {} }
+try { fetchChallenge(); } catch(e) { try { setUiStatus(false, `init fetchChallenge failed: ${e?.message || String(e)}`); } catch {} }
+try { loadContact(); } catch(e) {}
+try { fetchPaperState(); } catch(e) { try { setUiStatus(false, `init fetchPaperState failed: ${e?.message || String(e)}`); } catch {} }
 // default chart timeframe & initial load
 __chartTf = '5m';
 ensurePaperChart('ES');
