@@ -1523,8 +1523,9 @@ async function resetChallenge() {
 
 /* ── UPDATE UI ── */
 function updateUI() {
-  const liveEnabled = _challengeData && _challengeData.live_enabled === true;
-  const paper = _paperData || {};
+  try {
+    const liveEnabled = _challengeData && _challengeData.live_enabled === true;
+    const paper = _paperData || {};
 
   const bal = liveEnabled ? (state.balance || 0) : Number(paper.balance ?? state.balance ?? 0);
   const startBal = liveEnabled
@@ -1601,18 +1602,25 @@ function updateUI() {
   /* daily target */
   const targetAmt = startBal * 0.006;
   const targetPct = targetAmt > 0 ? Math.min(Math.max(pnl / targetAmt * 100, 0), 100) : 0;
-  document.getElementById('target-pct-metric').textContent = `${Math.round(targetPct)}%`;
-  document.getElementById('target-pct-metric').className = 'mval ' + (targetPct >= 100 ? 'green' : '');
-  document.getElementById('target-sub').textContent = `$${Math.max(pnl, 0).toFixed(2)} / $${targetAmt.toFixed(2)}`;
+  const tpEl = document.getElementById('target-pct-metric');
+  if (tpEl) tpEl.textContent = `${Math.round(targetPct)}%`;
+  if (tpEl) tpEl.className = 'mval ' + (targetPct >= 100 ? 'green' : '');
+  const tsEl = document.getElementById('target-sub');
+  if (tsEl) tsEl.textContent = `$${Math.max(pnl, 0).toFixed(2)} / $${targetAmt.toFixed(2)}`;
 
   /* progress bar */
   const lossFloor = (startN ?? 0) * 0.90;
   const drawdownPct = (startN && startN > 0 && balN != null) ? Math.max(0, (startN - balN) / startN * 100) : 0;
-  document.getElementById('prog-floor').textContent = startN == null ? '$—' : `$${lossFloor.toFixed(2)}`;
-  document.getElementById('prog-fill').style.width = `${Math.min(drawdownPct * 10, 100)}%`;
-  document.getElementById('prog-left').textContent = Number.isFinite(drawdownPct) ? `${drawdownPct.toFixed(2)}% drawdown` : '—';
-  document.getElementById('prog-right').textContent = balN == null ? '$—' : `$${balN.toFixed(2)} current`;
-  document.getElementById('prog-target').textContent = startN == null ? '$—' : `$${(startN * 1.006).toFixed(2)}`;
+  const pfEl = document.getElementById('prog-floor');
+  if (pfEl) pfEl.textContent = startN == null ? '$—' : `$${lossFloor.toFixed(2)}`;
+  const pfillEl = document.getElementById('prog-fill');
+  if (pfillEl) pfillEl.style.width = `${Math.min(drawdownPct * 10, 100)}%`;
+  const plEl = document.getElementById('prog-left');
+  if (plEl) plEl.textContent = Number.isFinite(drawdownPct) ? `${drawdownPct.toFixed(2)}% drawdown` : '—';
+  const prEl = document.getElementById('prog-right');
+  if (prEl) prEl.textContent = balN == null ? '$—' : `$${balN.toFixed(2)} current`;
+  const ptEl = document.getElementById('prog-target');
+  if (ptEl) ptEl.textContent = startN == null ? '$—' : `$${(startN * 1.006).toFixed(2)}`;
 
   /* toggle */
   const btn = document.getElementById('toggle-btn');
@@ -1666,10 +1674,12 @@ function updateUI() {
   else if (etH >= 8 && etH < 11) sess = 'NY Pine / LRNY ●';
   else if (etH >= 9 && etH < 12) sess = 'NY ORB ●';
   else if (etH >= 19 || etH < 3) sess = 'Asia (building range)';
-  document.getElementById('session-active').textContent = sess;
+  const saEl = document.getElementById('session-active');
+  if (saEl) saEl.textContent = sess;
 
   /* last updated */
-  document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
+  const luEl = document.getElementById('last-update');
+  if (luEl) luEl.textContent = new Date().toLocaleTimeString();
 
   /* session stats */
   const ss = state.session_stats || {};
@@ -1694,7 +1704,8 @@ function updateUI() {
   updateChart(startBal);
 
   /* calendar label */
-  document.getElementById('chart-start-label').textContent = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric'});
+  const cslEl = document.getElementById('chart-start-label');
+  if (cslEl) cslEl.textContent = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric'});
 
   /* trades */
   renderTrades(trades);
@@ -1702,6 +1713,10 @@ function updateUI() {
   renderLog('ai-log', state.decision_log || []);
   renderLog('ranker-log', state.ranker_log || []);
   buildCal();
+  } catch (e) {
+    console.error(e);
+    try { setUiStatus(false, `updateUI failed: ${e?.message || String(e)}`); } catch {}
+  }
 }
 
 /* ── CHART ── */
@@ -1925,6 +1940,12 @@ function _applyChartTheme(){
 function initPaperChart(){
   const el = document.getElementById('paper-chart');
   if (!el || __chart) return;
+  if (!window.LightweightCharts) {
+    const st = document.getElementById('paper-chart-status');
+    if (st) st.textContent = 'Chart library failed to load (LightweightCharts missing).';
+    try { setUiStatus(false, 'Chart failed to load (LightweightCharts missing)'); } catch {}
+    return;
+  }
   __chart = LightweightCharts.createChart(el, {
     height: el.clientHeight || 360,
     autoSize: true,
