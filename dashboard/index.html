@@ -2016,6 +2016,15 @@ async function fetchCandles(sym, tf){
 }
 
 async function ensurePaperChart(sym){
+  // If the chart library CDN is blocked/slow, don't let the whole dashboard break.
+  if (!window.LightweightCharts) {
+    try {
+      const st = document.getElementById('paper-chart-status');
+      if (st) st.textContent = 'Chart library failed to load (check network/CSP).';
+      setUiStatus(false, 'Chart library failed to load');
+    } catch {}
+    return;
+  }
   initPaperChart();
   const s = _normSymbol(sym || document.getElementById('paper-sym')?.value || 'ES');
   __chartSym = s;
@@ -3218,12 +3227,12 @@ try { loadContact(); } catch(e) {}
 try { fetchPaperState(); } catch(e) { try { setUiStatus(false, `init fetchPaperState failed: ${e?.message || String(e)}`); } catch {} }
 // default chart timeframe & initial load
 __chartTf = '5m';
-ensurePaperChart('ES');
+try { ensurePaperChart('ES'); } catch(e) { try { setUiStatus(false, `init chart failed: ${e?.message || String(e)}`); } catch {} }
 setInterval(fetchState, 5000);
 setInterval(fetchRankings, 30000);
 setInterval(fetchChallenge, 5000);
 setInterval(()=>{ if (!(_challengeData && _challengeData.live_enabled === true) || __mode === 'paper') fetchPaperState(); }, 2000);
-setInterval(()=>{ if (__mode === 'paper') ensurePaperChart(document.getElementById('paper-sym')?.value); }, 5000);
+setInterval(()=>{ if (__mode === 'paper') { try { ensurePaperChart(document.getElementById('paper-sym')?.value); } catch {} } }, 5000);
 
 // --- Mobile paper bottom-sheet drag (chart stays full screen) ---
 let __sheetY = 0; // translateY px (0 = peek, larger = drag sheet down)
