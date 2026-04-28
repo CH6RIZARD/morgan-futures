@@ -624,7 +624,12 @@ body.paper-mode #paper-stage{position:relative}
 /* Desktop paper: chart + order column (sheet visible, not a bottom drawer) */
 @media(min-width:981px){
   body.paper-mode #paper-workspace{min-height:calc(100vh - 140px)}
-  body.paper-mode #paper-chart-card{min-height:0}
+  /* Let desktop users resize chart like TradingView panels */
+  body.paper-mode #paper-chart-card{
+    min-height:0;
+    resize: both;
+    overflow: auto;
+  }
   body.paper-mode #paper-chart{height:min(58vh,520px)!important;min-height:380px}
   body.paper-mode #paper-sheet{
     display:block;
@@ -791,7 +796,7 @@ body.paper-mode #paper-stage{position:relative}
     </div>
 
     <div class="phdr" style="margin-bottom:12px">
-      <div class="ptitle">Lucid 50K Challenge</div>
+      <div class="ptitle" id="ch-title">Lucid 50K Challenge</div>
       <div id="ch-status-pill" class="pbadge">Active</div>
     </div>
 
@@ -1280,6 +1285,11 @@ async function fetchChallenge() {
 
 function renderChallenge(d) {
   if (!d || !Object.keys(d).length) return;
+
+  // Title should reflect SIM vs LIVE mode
+  const liveEnabled = d.live_enabled === true;
+  const titleEl = document.getElementById('ch-title');
+  if (titleEl) titleEl.textContent = liveEnabled ? 'Lucid 50K Challenge' : 'SIM Paper Trading';
 
   // Status pill
   const status = d.status || 'active';
