@@ -803,22 +803,22 @@ body.paper-mode #paper-stage{position:relative}
     <!-- 4 challenge metrics -->
     <div class="cc-grid">
       <div class="cc-stat">
-        <div class="cc-label">Total P&L</div>
+        <div class="cc-label" id="ch-label-1">Total P&amp;L</div>
         <div class="cc-val g" id="ch-total">$0</div>
         <div class="cc-sub" id="ch-pct">0% to target</div>
       </div>
       <div class="cc-stat">
-        <div class="cc-label">Drawdown</div>
+        <div class="cc-label" id="ch-label-2">Drawdown</div>
         <div class="cc-val" id="ch-dd">$0</div>
         <div class="cc-sub" id="ch-dd-left">$2000 left</div>
       </div>
       <div class="cc-stat">
-        <div class="cc-label">Consistency</div>
+        <div class="cc-label" id="ch-label-3">Consistency</div>
         <div class="cc-val" id="ch-consistency">—</div>
-        <div class="cc-sub">limit 52%</div>
+        <div class="cc-sub" id="ch-consistency-sub">limit 52%</div>
       </div>
       <div class="cc-stat">
-        <div class="cc-label">Today</div>
+        <div class="cc-label" id="ch-label-4">Today</div>
         <div class="cc-val" id="ch-today">$0</div>
         <div class="cc-sub" id="ch-today-left">$1400 cap</div>
       </div>
@@ -827,9 +827,9 @@ body.paper-mode #paper-stage{position:relative}
     <!-- Progress bar $0 → $3000 -->
     <div style="margin-bottom:14px">
       <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted2);margin-bottom:4px">
-        <span>$0</span>
+        <span id="ch-prog-left-label">$0</span>
         <span id="ch-prog-label" style="color:var(--text);font-weight:500">$0 / $3000</span>
-        <span style="color:var(--green)">$3000 target</span>
+        <span id="ch-prog-right-label" style="color:var(--green)">$3000 target</span>
       </div>
       <div class="cc-prog-track">
         <div class="cc-prog-fill" id="ch-prog-bar" style="width:0%"></div>
@@ -1290,6 +1290,44 @@ function renderChallenge(d) {
   const liveEnabled = d.live_enabled === true;
   const titleEl = document.getElementById('ch-title');
   if (titleEl) titleEl.textContent = liveEnabled ? 'Lucid 50K Challenge' : 'SIM Paper Trading';
+
+  // In SIM mode, map this panel to paper balances instead of Lucid challenge rules.
+  if (!liveEnabled) {
+    const p = _paperData || {};
+    const bal = Number(p.balance ?? 0);
+    const d0 = Number(p.daily_start_balance ?? bal);
+    const dailyPnl = Number(p.daily_pnl ?? (bal - d0));
+    const start = Number(p.starting_balance ?? p.start_balance ?? d0);
+    const totalPnl = bal - start;
+
+    const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+
+    setTxt('ch-label-1', 'Balance');
+    setTxt('ch-total', `$${bal.toFixed(0)}`);
+    setTxt('ch-pct', `Start $${start.toFixed(0)} · P&L ${totalPnl >= 0 ? '+' : ''}$${totalPnl.toFixed(0)}`);
+
+    setTxt('ch-label-2', 'Daily P&L');
+    setTxt('ch-dd', `${dailyPnl >= 0 ? '+' : ''}$${dailyPnl.toFixed(0)}`);
+    setTxt('ch-dd-left', `Daily start $${d0.toFixed(0)}`);
+
+    setTxt('ch-label-3', 'Positions');
+    setTxt('ch-consistency', String((Array.isArray(p.positions) ? p.positions.length : 0)));
+    setTxt('ch-consistency-sub', 'open');
+
+    setTxt('ch-label-4', 'Trades');
+    setTxt('ch-today', String((Array.isArray(p.trades) ? p.trades.length : 0)));
+    setTxt('ch-today-left', 'closed');
+
+    setTxt('ch-prog-left-label', `$${start.toFixed(0)}`);
+    setTxt('ch-prog-label', `$${bal.toFixed(0)} current`);
+    setTxt('ch-prog-right-label', `${totalPnl >= 0 ? '+' : ''}$${totalPnl.toFixed(0)} P&L`);
+
+    const bar = document.getElementById('ch-prog-bar');
+    if (bar) {
+      const pct = start > 0 ? Math.max(0, Math.min(((bal - start) / start) * 100, 100)) : 0;
+      bar.style.width = `${pct}%`;
+    }
+  }
 
   // Status pill
   const status = d.status || 'active';
