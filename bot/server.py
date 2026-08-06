@@ -722,6 +722,54 @@ def dashboard():
     return resp
 
 
+# ── Mobile app, web build ──────────────────────────────────────────────────
+# The Expo web export of the Morgan Futures app (tabs, Trade Desk, prop-firm
+# rules). Served from this origin on purpose: the app's API client uses
+# same-origin requests on web, so hosting it here sidesteps CORS entirely.
+# The dashboard at "/" is the operator view; this is the product.
+WEBAPP_DIR = os.path.join(os.path.dirname(__file__), "..", "webapp")
+
+
+def _webapp_index():
+    resp = send_from_directory(WEBAPP_DIR, "index.html", max_age=0)
+    resp.headers["Cache-Control"] = "no-store, max-age=0"
+    return resp
+
+
+@app.route("/app")
+@app.route("/app/")
+def webapp_root():
+    return _webapp_index()
+
+
+@app.route("/app/<path:subpath>")
+def webapp_route(subpath: str):
+    # Expo Router owns client-side routing, so any unknown path under /app must
+    # fall back to index.html rather than 404 — otherwise a refresh on a deep
+    # link breaks.
+    candidate = os.path.join(WEBAPP_DIR, subpath)
+    if os.path.isfile(candidate):
+        return send_from_directory(WEBAPP_DIR, subpath)
+    return _webapp_index()
+
+
+# The export references its bundle and assets by absolute path, so these have
+# to live at the root rather than under /app.
+@app.route("/_expo/<path:subpath>")
+def webapp_expo_assets(subpath: str):
+    return send_from_directory(os.path.join(WEBAPP_DIR, "_expo"), subpath)
+
+
+@app.route("/assets/<path:subpath>")
+def webapp_assets(subpath: str):
+    return send_from_directory(os.path.join(WEBAPP_DIR, "assets"), subpath)
+
+
+@app.route("/favicon.ico")
+def webapp_favicon():
+    return send_from_directory(WEBAPP_DIR, "favicon.ico")
+
+
 @app.route("/health")
 def health():
     return jsonify({"ok": True})
