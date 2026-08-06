@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 import threading
 import time
 import uuid
@@ -18,6 +19,8 @@ from .notify import send_email, send_twilio_sms
 from .contact_store import load_contact, save_contact
 from .rithmic_executor import RithmicExecutor
 from .challenge_manager import ChallengeManager
+from .paper_engine import PaperEngine
+from .copy_router import CopyRouter
 from .signals import (
     SYMBOLS,
     OHLC_INTERVAL_MINUTES,
@@ -37,6 +40,26 @@ from .signals import (
 
 ET = ZoneInfo("America/New_York")
 app = Flask(__name__)
+
+# ── Basic auth (only active when DASH_PASSWORD is set) ─────────────────────
+DASH_USER = os.environ.get("DASH_USER", "morgan")
+DASH_PASSWORD = os.environ.get("DASH_PASSWORD", "").strip()
+
+
+@app.before_request
+def _require_basic_auth():
+    if not DASH_PASSWORD:
+        return None
+    auth = request.authorization
+    if auth and auth.username == DASH_USER and secrets.compare_digest(
+        auth.password or "", DASH_PASSWORD
+    ):
+        return None
+    return (
+        "Authentication required",
+        401,
+        {"WWW-Authenticate": 'Basic realm="Morgan Futures"'},
+    )
 
 # ── Live trading (Rithmic) ─────────────────────────────────────────────────
 LIVE_TRADING_ENABLED = os.environ.get("LIVE_TRADING_ENABLED", "0").strip() == "1"
@@ -126,26 +149,27 @@ CONTRACT_SPECS: dict[str, dict] = {
     "ZN": {"tick_size": 0.015625, "tick_value": 15.625},
 }
 
-_paper_lock = threading.RLock()
-_paper: dict = {
-    "enabled": True,
-    "starting_balance": float(os.environ.get("PAPER_START_BALANCE", "50000")),
-    "balance": float(os.environ.get("PAPER_START_BALANCE", "50000")),
-    "daily_start_balance": float(os.environ.get("PAPER_START_BALANCE", "50000")),
-    "last_day_id_et": None,
-    "positions": [],
-    "trades": [],
-    "log": [],
-}
+# ── Paper desk ─────────────────────────────────────────────────────────────
+# The simulated venue lives in bot/paper_engine.py: real order types
+# (MARKET / LIMIT / STOP / STOP_LIMIT / TRAILING_STOP), brackets, OCO groups,
+# per-contract commission and configurable slippage — the two things
+# TradingView's paper trading does not model at all.
+#
+# price_fn is a lambda because _mark_price is defined further down this module;
+# the engine resolves it lazily on every tick.
+paper = PaperEngine(
+    starting_balance=float(os.environ.get("PAPER_START_BALANCE", "50000")),
+    commission_per_contract=float(os.environ.get("PAPER_COMMISSION", "2.50")),
+    slippage_ticks=float(os.environ.get("PAPER_SLIPPAGE_TICKS", "0")),
+    price_fn=lambda s: _mark_price(s),
+)
 
-
-def _paper_log(msg: str, level: str = "INFO") -> None:
-    with _paper_lock:
-        _paper["log"].insert(
-            0,
-            {"time": datetime.now(timezone.utc).isoformat(), "decision": level, "message": str(msg)},
-        )
-        _paper["log"] = _paper["log"][:400]
+# ── Copy trading ───────────────────────────────────────────────────────────
+# Fans the trader's OWN signals across the trader's OWN prop-firm accounts,
+# through a pre-trade compliance gate (trailing DD, daily loss, max size,
+# no-hedge, consistency). It never mirrors anyone else's signals — doing so
+# would cross out of the self-executing 17 CFR 4.14(a)(9) exemption.
+copy_router = CopyRouter(executor=_rithmic, paper_engine=paper)
 
 
 def _now_day_id_et() -> int:
@@ -276,153 +300,41 @@ def _pnl_usd(symbol: str, side: str, entry: float, mark: float, qty: int) -> flo
     return float(ticks) * tick_value * int(qty)
 
 
-def _trail_stop(pos: dict, mark: float) -> None:
-    try:
-        trail_ticks = int(pos.get("trail_ticks") or 0)
-        if trail_ticks <= 0:
-            return
-        tick_size = float((_spec(_contract_base(str(pos.get("symbol") or ""))).get("tick_size") or 0.25))
-        side = str(pos.get("side") or "BUY").upper()
-        if side == "BUY":
-            best = float(pos.get("best_mark") or mark)
-            best = max(best, mark)
-            pos["best_mark"] = best
-            new_sl = best - trail_ticks * tick_size
-            cur_sl = pos.get("stop_loss")
-            pos["stop_loss"] = round(new_sl, 6) if cur_sl is None else round(max(float(cur_sl), new_sl), 6)
-        else:
-            best = float(pos.get("best_mark") or mark)
-            best = min(best, mark)
-            pos["best_mark"] = best
-            new_sl = best + trail_ticks * tick_size
-            cur_sl = pos.get("stop_loss")
-            pos["stop_loss"] = round(new_sl, 6) if cur_sl is None else round(min(float(cur_sl), new_sl), 6)
-    except Exception:
-        return
+def _drain_paper_events(events: list) -> None:
+    """Mirror engine events into the decision log + challenge metrics.
 
-
-def _close_position_locked(pos_id: str, exit_price: float, reason: str = "MANUAL") -> dict | None:
-    positions = _paper.get("positions") or []
-    idx = next((i for i, p in enumerate(positions) if p.get("id") == pos_id), None)
-    if idx is None:
-        return None
-
-    pos = positions.pop(idx)
-    pos["status"] = "CLOSED"
-    pos["exit_price"] = float(exit_price)
-    pos["exit_reason"] = str(reason)
-    pos["closed_at"] = datetime.now(timezone.utc).isoformat()
-    pnl = _pnl_usd(pos["symbol"], pos["side"], float(pos["entry_price"]), float(exit_price), int(pos["qty"]))
-    pos["realized_pnl_usd"] = round(float(pnl), 2)
-    _paper["balance"] = round(float(_paper.get("balance") or 0.0) + float(pnl), 2)
-    _paper.setdefault("trades", []).insert(0, pos)
-    _paper["trades"] = _paper["trades"][:2000]
-    _paper_log(
-        f"CLOSED {pos['symbol']} {pos['side']} x{pos['qty']} @ {exit_price} ({reason}) pnl=${pos['realized_pnl_usd']}",
-        "EXECUTED",
-    )
-    return pos
-
-
-def _paper_insert_open_position(
-    sym: str,
-    side: str,
-    qty: int,
-    sl_f: float | None,
-    tp_f: float | None,
-    trail_ticks: int,
-    *,
-    fill_price: float,
-    mark_hint: float | None,
-    note: str | None = None,
-) -> dict:
-    """Append an open paper position (caller must hold _paper_lock)."""
-    m = float(mark_hint) if mark_hint is not None else float(fill_price)
-    pos: dict = {
-        "id": uuid.uuid4().hex,
-        "symbol": sym,
-        "side": side,
-        "qty": int(qty),
-        "entry_price": round(float(fill_price), 6),
-        "mark_price": round(float(m), 6),
-        "stop_loss": round(sl_f, 6) if sl_f is not None else None,
-        "take_profit": round(tp_f, 6) if tp_f is not None else None,
-        "trail_ticks": trail_ticks if trail_ticks > 0 else None,
-        "best_mark": float(m),
-        "status": "OPEN",
-        "opened_at": datetime.now(timezone.utc).isoformat(),
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-        "unrealized_pnl_usd": 0.0,
-        "contract": _spec(_contract_base(sym)),
-    }
-    if note:
-        pos["note"] = str(note)
-    _paper.setdefault("positions", []).insert(0, pos)
-    _paper["positions"] = _paper["positions"][:200]
-    _paper_log(
-        f"OPEN {sym} {side} x{qty} @ {pos['entry_price']} SL={pos.get('stop_loss')} TP={pos.get('take_profit')} trail={pos.get('trail_ticks')}"
-        + (f" ({note})" if note else ""),
-        "EXECUTED",
-    )
-    return pos
-
-
-def _paper_tick() -> None:
-    day_id = _now_day_id_et()
-    with _paper_lock:
-        if _paper.get("last_day_id_et") != day_id:
-            _paper["last_day_id_et"] = day_id
-            _paper["daily_start_balance"] = float(_paper.get("balance") or 0.0)
-        positions = list(_paper.get("positions") or [])
-
-    for pos in positions:
-        sym = pos.get("symbol")
-        if not sym:
-            continue
-        mark = _mark_price(sym)
-        if mark is None:
-            continue
-
-        with _paper_lock:
-            cur = next((p for p in (_paper.get("positions") or []) if p.get("id") == pos.get("id")), None)
-            if cur is None:
+    The engine is deliberately self-contained (no imports from this module), so
+    the side effects the old inline paper code did on close — challenge
+    bookkeeping and the [SIM] log line — are re-attached here.
+    """
+    for ev in events or []:
+        try:
+            if ev.get("type") != "CLOSE":
                 continue
-
-            _trail_stop(cur, float(mark))
-            cur["mark_price"] = float(mark)
-            cur["unrealized_pnl_usd"] = round(
-                _pnl_usd(cur["symbol"], cur["side"], float(cur["entry_price"]), float(mark), int(cur["qty"])),
-                2,
+            t = ev.get("trade") or {}
+            net = float(t.get("net_pnl") or 0.0)
+            log(
+                f"[SIM] Closed {t.get('symbol')} {t.get('side')} x{t.get('qty')} "
+                f"{t.get('reason')} net=${net}",
+                "EXECUTED",
             )
-            cur["updated_at"] = datetime.now(timezone.utc).isoformat()
-
-            sl = cur.get("stop_loss")
-            tp = cur.get("take_profit")
-            side = str(cur.get("side") or "BUY").upper()
-            hit = None
-            if side == "BUY":
-                if sl is not None and float(mark) <= float(sl):
-                    hit = ("STOP", float(sl))
-                elif tp is not None and float(mark) >= float(tp):
-                    hit = ("TP", float(tp))
-            else:
-                if sl is not None and float(mark) >= float(sl):
-                    hit = ("STOP", float(sl))
-                elif tp is not None and float(mark) <= float(tp):
-                    hit = ("TP", float(tp))
-
-            if hit:
-                reason, exit_price = hit
-                _close_position_locked(cur["id"], exit_price=exit_price, reason=reason)
+            # Keep Lucid/challenge metrics in sync with SIM trades, as before.
+            _challenge.record_trade(net)
+        except Exception:
+            continue
 
 
 def paper_loop() -> None:
+    """Drive the simulated venue off live marks.
+
+    tick_all() pulls a price for every symbol with a working order or an open
+    position and returns the resulting fill/close/trigger events.
+    """
     while True:
         try:
-            if bool(_paper.get("enabled", True)):
-                _paper_tick()
+            _drain_paper_events(paper.tick_all())
         except Exception as e:
-            _paper_log(f"paper loop error: {e}", "ERROR")
+            log(f"paper loop error: {e}", "ERROR")
         time.sleep(float(os.environ.get("PAPER_TICK_SEC", "2.0")))
 
 
@@ -874,16 +786,16 @@ def get_state():
     # When live trading is disabled, surface internal paper engine balances/positions here
     # so "SIM" test signals visibly change Balance / P&L / Positions in the top row.
     try:
-        with _paper_lock:
-            bal = float(_paper.get("balance") or 0.0)
-            d0 = float(_paper.get("daily_start_balance") or bal)
-            start_bal = float(_paper.get("starting_balance") or 0.0)
-            base["balance"] = bal
-            base["daily_start_balance"] = d0
-            base["start_balance"] = start_bal or d0 or bal
-            base["daily_pnl"] = round(bal - d0, 2)
-            base["open_positions"] = list(_paper.get("positions") or [])
-            base["trades"] = list(_paper.get("trades") or [])[:500]
+        ps = paper.state()
+        bal = float(ps.get("balance") or 0.0)
+        d0 = float(ps.get("day_start_balance") or bal)
+        base["balance"] = bal
+        base["daily_start_balance"] = d0
+        base["start_balance"] = float(ps.get("starting_balance") or 0.0) or d0 or bal
+        base["daily_pnl"] = float(ps.get("day_pnl") or round(bal - d0, 2))
+        base["equity"] = float(ps.get("equity") or bal)
+        base["open_positions"] = list(ps.get("positions") or [])
+        base["trades"] = list(ps.get("trades") or [])[:500]
     except Exception:
         pass
 
@@ -1248,15 +1160,26 @@ def fire_test_signal():
             tp_val = round(entry - 66 * tick_size, 4)
 
     rr = abs(tp_val - entry) / abs(entry - sl_val) if abs(entry - sl_val) > 0 else 1.0
+    tqty = max(1, min(int(data.get("qty") or 1), 50))
     sig = {
+        # Stable id, minted here at the source. The copy router dedupes fan-outs
+        # on (signal_id, account_id), so a redelivered signal must carry the same
+        # id or it would double-fill across every connected account.
+        "id": uuid.uuid4().hex,
         "symbol": sym,
         "type": strategy,
         "direction": direction,
+        "side": direction,
+        "qty": tqty,
         "entry": entry,
         "stop_loss": sl_val,
         "take_profit": tp_val,
+        "sl": sl_val,
+        "tp": tp_val,
+        "strategy": strategy,
         "rr": round(rr, 2),
         "time": int(time.time()),
+        "ts": time.time(),
         "time_et": datetime.now(ET).strftime("%Y-%m-%d %H:%M"),
         "test_signal": True,
     }
@@ -1271,90 +1194,70 @@ def fire_test_signal():
     if _is_live_enabled():
         _maybe_execute_live(sig)
     else:
-        # Mirror into internal paper engine so P&L / SL / TP can be exercised without Rithmic.
+        # Mirror into the paper engine so P&L / SL / TP can be exercised without Rithmic.
         try:
-            tqty = int(data.get("qty") or 1)
-            tqty = max(1, min(tqty, 50))
-            mkt = _mark_price(sym)
-            with _paper_lock:
-                paper_pos = _paper_insert_open_position(
-                    sym,
-                    direction,
-                    tqty,
-                    sl_val,
-                    tp_val,
-                    0,
-                    fill_price=float(entry),
-                    mark_hint=float(mkt) if mkt is not None else float(entry),
-                    note="TEST_SIGNAL",
-                )
+            res = paper.place_order({
+                "symbol": sym,
+                "side": direction,
+                "qty": tqty,
+                "type": "MARKET",
+                "bracket": {"sl_price": sl_val, "tp_price": tp_val},
+                "tag": strategy,
+            })
+            paper_pos = res.get("position")
+            _drain_paper_events(res.get("events") or [])
         except Exception as e:
             log(f"test signal paper mirror failed: {e}", "ERROR")
 
-    return jsonify({"ok": True, "mode": mode, "signal": sig, "paper_position": paper_pos})
+    # Fan out to the trader's other prop-firm accounts, compliance-gated.
+    copy_results: list = []
+    try:
+        fan = copy_router.route_signal(sig)
+        copy_results = fan.get("results") or []
+    except Exception as e:
+        log(f"copy fan-out failed: {e}", "ERROR")
+
+    return jsonify({
+        "ok": True,
+        "mode": mode,
+        "signal": sig,
+        "paper_position": paper_pos,
+        "copy_results": copy_results,
+    })
 
 
 @app.route("/api/paper/state")
 def paper_state():
-    with _paper_lock:
-        bal = float(_paper.get("balance") or 0.0)
-        d0 = float(_paper.get("daily_start_balance") or bal)
-        out = {
-            "enabled": bool(_paper.get("enabled", True)),
-            "balance": bal,
-            "daily_start_balance": d0,
-            "daily_pnl": round(bal - d0, 2),
-            "positions": list(_paper.get("positions") or []),
-            "trades": list(_paper.get("trades") or [])[:500],
-            "log": list(_paper.get("log") or [])[:200],
-            "contract_specs": CONTRACT_SPECS,
-            "symbols": list(SYMBOLS),
-        }
+    out = paper.state()
+    out["symbols"] = list(SYMBOLS)
     return jsonify(out)
 
 
 @app.route("/api/paper/order", methods=["POST"])
 def paper_order():
+    """Place a paper order.
+
+    Accepts the full ticket (type / limit_price / stop_price / trail_ticks /
+    tif / bracket) and still accepts the old flat {stop_loss, take_profit}
+    payload, which the engine converts into a bracket.
+    """
     data = request.get_json(force=True, silent=True) or {}
     sym = str(data.get("symbol") or "").strip()
     side = str(data.get("side") or "BUY").strip().upper()
-    qty = int(data.get("qty") or 1)
-    sl = data.get("stop_loss")
-    tp = data.get("take_profit")
-    trail_ticks = int(data.get("trail_ticks") or 0)
 
     if sym not in SYMBOLS:
         return jsonify({"ok": False, "error": "unknown_symbol"}), 400
     if side not in ("BUY", "SELL"):
         return jsonify({"ok": False, "error": "bad_side"}), 400
-    qty = max(1, min(qty, 50))
 
-    mark = _mark_price(sym)
-    if mark is None:
-        return jsonify({"ok": False, "error": "no_market_data"}), 503
+    payload = dict(data)
+    payload["symbol"] = sym
+    payload["side"] = side
+    payload["qty"] = max(1, min(int(data.get("qty") or 1), 50))
 
-    try:
-        sl_f = float(sl) if sl is not None and str(sl).strip() != "" else None
-    except Exception:
-        sl_f = None
-    try:
-        tp_f = float(tp) if tp is not None and str(tp).strip() != "" else None
-    except Exception:
-        tp_f = None
-
-    with _paper_lock:
-        pos = _paper_insert_open_position(
-            sym,
-            side,
-            qty,
-            sl_f,
-            tp_f,
-            trail_ticks,
-            fill_price=float(mark),
-            mark_hint=float(mark),
-        )
-
-    return jsonify({"ok": True, "position": pos})
+    res = paper.place_order(payload)
+    _drain_paper_events(res.get("events") or [])
+    return jsonify(res), (200 if res.get("ok") else 400)
 
 
 @app.route("/api/paper/close", methods=["POST"])
@@ -1364,19 +1267,121 @@ def paper_close():
     if not pos_id:
         return jsonify({"ok": False, "error": "missing_id"}), 400
 
-    with _paper_lock:
-        pos = next((p for p in (_paper.get("positions") or []) if p.get("id") == pos_id), None)
-        if not pos:
-            return jsonify({"ok": False, "error": "not_found"}), 404
-        sym = pos.get("symbol")
+    qty = data.get("qty")
+    res = paper.close_position(pos_id, float(qty) if qty is not None else None)
+    _drain_paper_events(res.get("events") or [])
+    if not res.get("ok"):
+        return jsonify(res), 404
+    # Legacy shape: the mobile client reads {trade}.
+    return jsonify(res)
 
-    mark = _mark_price(sym) if sym else None
-    if mark is None:
-        mark = float(pos.get("mark_price") or pos.get("entry_price") or 0.0)
 
-    with _paper_lock:
-        closed = _close_position_locked(pos_id, exit_price=float(mark), reason="MANUAL")
-    return jsonify({"ok": True, "trade": closed})
+@app.route("/api/paper/order/cancel", methods=["POST"])
+def paper_order_cancel():
+    data = request.get_json(force=True, silent=True) or {}
+    oid = str(data.get("id") or "").strip()
+    if not oid:
+        return jsonify({"ok": False, "error": "missing_id"}), 400
+    res = paper.cancel_order(oid)
+    return jsonify(res), (200 if res.get("ok") else 404)
+
+
+@app.route("/api/paper/order/modify", methods=["POST"])
+def paper_order_modify():
+    data = request.get_json(force=True, silent=True) or {}
+    oid = str(data.get("id") or "").strip()
+    if not oid:
+        return jsonify({"ok": False, "error": "missing_id"}), 400
+    res = paper.modify_order(oid, {k: v for k, v in data.items() if k != "id"})
+    return jsonify(res), (200 if res.get("ok") else 400)
+
+
+@app.route("/api/paper/cancel_all", methods=["POST"])
+def paper_cancel_all():
+    data = request.get_json(force=True, silent=True) or {}
+    sym = str(data.get("symbol") or "").strip() or None
+    return jsonify(paper.cancel_all(sym))
+
+
+@app.route("/api/paper/flatten", methods=["POST"])
+def paper_flatten():
+    res = paper.flatten_all()
+    _drain_paper_events(res.get("events") or [])
+    return jsonify(res)
+
+
+@app.route("/api/paper/reset", methods=["POST"])
+def paper_reset():
+    data = request.get_json(force=True, silent=True) or {}
+    bal = data.get("balance")
+    return jsonify(paper.reset(float(bal) if bal is not None else None))
+
+
+@app.route("/api/paper/config", methods=["POST"])
+def paper_config():
+    data = request.get_json(force=True, silent=True) or {}
+    data.pop("price_fn", None)  # never settable over HTTP
+    res = paper.configure(**data)
+    return jsonify(res), (200 if res.get("ok") else 400)
+
+
+# =====================
+# COPY TRADING (the trader's own signals -> the trader's own prop accounts)
+# =====================
+
+
+@app.route("/api/copy/state")
+def copy_state():
+    return jsonify(copy_router.state())
+
+
+@app.route("/api/copy/toggle", methods=["POST"])
+def copy_toggle():
+    data = request.get_json(force=True, silent=True) or {}
+    return jsonify(copy_router.set_enabled(bool(data.get("enabled"))))
+
+
+@app.route("/api/copy/accounts", methods=["POST"])
+def copy_add_account():
+    data = request.get_json(force=True, silent=True) or {}
+    res = copy_router.add_account(data)
+    return jsonify(res), (200 if res.get("ok", True) else 400)
+
+
+@app.route("/api/copy/accounts/<account_id>", methods=["PATCH", "DELETE"])
+def copy_account(account_id: str):
+    if request.method == "DELETE":
+        res = copy_router.remove_account(account_id)
+    else:
+        res = copy_router.update_account(account_id, request.get_json(force=True, silent=True) or {})
+    return jsonify(res), (200 if res.get("ok", True) else 404)
+
+
+@app.route("/api/copy/leader", methods=["POST"])
+def copy_leader():
+    data = request.get_json(force=True, silent=True) or {}
+    res = copy_router.set_leader(str(data.get("account_id") or ""))
+    return jsonify(res), (200 if res.get("ok", True) else 404)
+
+
+@app.route("/api/copy/evaluate", methods=["POST"])
+def copy_evaluate():
+    """Dry run: return the compliance verdicts without routing anything."""
+    data = request.get_json(force=True, silent=True) or {}
+    return jsonify({"ok": True, "results": copy_router.evaluate(data)})
+
+
+@app.route("/api/copy/kill", methods=["POST"])
+def copy_kill():
+    data = request.get_json(force=True, silent=True) or {}
+    return jsonify(copy_router.kill_switch(bool(data.get("on"))))
+
+
+@app.route("/api/copy/flatten", methods=["POST"])
+def copy_flatten():
+    data = request.get_json(force=True, silent=True) or {}
+    acct = str(data.get("account_id") or "").strip() or None
+    return jsonify(copy_router.flatten_all(acct))
 
 
 # =====================

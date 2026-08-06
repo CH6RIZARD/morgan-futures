@@ -203,46 +203,6 @@ body.theme-light *:focus{box-shadow:0 0 0 3px rgba(47, 129, 247, 0.28)}
 .left{display:flex;flex-direction:column;gap:1px;background:var(--border)}
 .panel{background:var(--bg);padding:16px 20px}
 
-/* ── PAPER FULLSCREEN MODE ── */
-body.paper-mode{overflow:hidden}
-body.paper-mode .sbar,
-body.paper-mode .metrics,
-body.paper-mode .chart-area,
-body.paper-mode .prog-section{display:none}
-body.paper-mode .main{grid-template-columns:1fr}
-body.paper-mode .right{display:none}
-body.paper-mode .left{min-height:calc(100vh - 54px);height:calc(100vh - 54px)}
-body.paper-mode #panel-rankings{display:none!important}
-body.paper-mode #panel-calendar{display:none!important}
-body.paper-mode #panel-history{display:none!important}
-body.paper-mode #panel-paper{display:block!important;flex:1;min-height:calc(100vh - 86px)}
-body.paper-mode .paper-workspace{flex:1;display:flex;flex-direction:column;min-height:0}
-body.paper-mode .paper-grid{
-  display:grid;
-  grid-template-columns:1fr 6px minmax(260px, min(var(--paper-col-w, 380px), 48vw));
-  gap:0 10px;
-  align-items:start;
-}
-.paper-splitter{
-  display:none;
-  width:6px;
-  min-height:200px;
-  cursor:col-resize;
-  border-radius:4px;
-  background:linear-gradient(180deg, transparent, rgba(210,180,140,.12), transparent);
-  align-self:stretch;
-  margin:8px 0;
-  touch-action:none;
-}
-.paper-splitter:hover{background:rgba(210,180,140,.18)}
-@media(min-width:981px){
-  .paper-splitter{display:block}
-}
-@media(max-width:980px){
-  body.paper-mode .paper-grid{grid-template-columns:1fr}
-}
-
-
 /* ── SECTION HEADER ── */
 .phdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
 .ptitle{font-size:12px;font-weight:500;color:var(--text)}
@@ -566,13 +526,6 @@ td{font-size:11px;padding:9px 0;border-bottom:1px solid #1a1232;color:#cbbff0;ve
   /* Toggle pill smaller */
   .pill{padding:5px 10px;font-size:10px}
 
-  /* Paper trading mobile: keep it actually usable */
-  body.paper-mode .left{height:auto;min-height:calc(100vh - 54px)}
-  body.paper-mode #panel-paper{min-height:calc(100vh - 54px)}
-  
-  body.paper-mode .paper-grid{grid-template-columns:1fr!important}
-  body.paper-mode #paper-positions{max-height:32vh;overflow:auto}
-  body.paper-mode #paper-trades{max-height:34vh;overflow:auto}
   #theme-select{width:100%}
 }
 
@@ -580,74 +533,6 @@ td{font-size:11px;padding:9px 0;border-bottom:1px solid #1a1232;color:#cbbff0;ve
   .metrics{grid-template-columns:repeat(2,1fr)}
   .metric:nth-child(5){grid-column:1 / span 2}
   .sym-grid{grid-template-columns:1fr}
-}
-
-
-/* === Mobile-first paper trading: chart is full screen, controls are a bottom sheet === */
-body.paper-mode #panel-paper{padding-bottom:0}
-body.paper-mode #paper-stage{position:relative}
-
-/* Sheet styling */
-#paper-sheet{display:none}
-#paper-sheet-grab{display:none}
-#paper-sheet-body{display:flex;flex-direction:column;gap:10px}
-#paper-sheet .grab-pill{width:44px;height:5px;border-radius:999px;background:rgba(255,255,255,.28);margin:10px auto}
-
-@media(max-width:980px){
-  body.paper-mode .left{height:100vh;min-height:100vh}
-  body.paper-mode #panel-paper{min-height:100vh}
-
-  /* Hide the metric tiles on mobile (values still update via API) */
-  body.paper-mode #panel-paper .paper-metrics{display:none}
-
-  /* Full-screen chart */
-  body.paper-mode #paper-chart-card{position:fixed;inset:0;z-index:10;border-radius:0;padding:10px;border:none;background:var(--panel2)}
-  body.paper-mode #paper-tf-row{position:absolute;left:10px;right:10px;top:44px;z-index:11}
-  body.paper-mode #paper-chart{position:absolute;left:0;right:0;top:0;bottom:0;height:auto!important;width:100vw;border-radius:0;border:none}
-  body.paper-mode #paper-chart-status{position:absolute;right:12px;top:14px;z-index:12}
-
-  /* Bottom sheet overlay */
-  body.paper-mode #paper-sheet{display:block;position:fixed;left:0;right:0;bottom:0;z-index:20;max-height:62vh;background:rgba(13,17,23,.82);backdrop-filter: blur(10px);border-top:1px solid var(--border);border-radius:16px 16px 0 0}
-  body.paper-mode #paper-sheet-grab{display:block;cursor:grab}
-  body.paper-mode #paper-sheet-body{padding:10px 10px 14px;overflow:auto;max-height:calc(62vh - 34px)}
-
-  /* Make inputs finger-friendly */
-  body.paper-mode #paper-order-card input,
-  body.paper-mode #paper-order-card select{font-size:14px;padding:12px 12px}
-  body.paper-mode #paper-submit{padding:12px 12px;font-size:13px}
-
-  /* Avoid nested scroll jank */
-  body.paper-mode #paper-positions,
-  body.paper-mode #paper-trades{max-height:none;overflow:visible}
-}
-
-/* Desktop paper: chart + order column (sheet visible, not a bottom drawer) */
-@media(min-width:981px){
-  body.paper-mode #paper-workspace{min-height:calc(100vh - 140px)}
-  /* Let desktop users resize chart like TradingView panels */
-  body.paper-mode #paper-chart-card{
-    min-height:0;
-    resize: both;
-    overflow: auto;
-  }
-  body.paper-mode #paper-chart{height:min(58vh,520px)!important;min-height:380px}
-  body.paper-mode #paper-sheet{
-    display:block;
-    position:relative;
-    transform:none!important;
-    max-height:none;
-    background:transparent;
-    border:none;
-    border-radius:0;
-    backdrop-filter:none;
-    -webkit-backdrop-filter:none;
-  }
-  body.paper-mode #paper-sheet-grab{display:none!important}
-  body.paper-mode #paper-sheet-body{
-    max-height:none;
-    padding:0;
-    overflow:visible;
-  }
 }
 
 </style>
@@ -669,7 +554,6 @@ body.paper-mode #paper-stage{position:relative}
   <div class="hcenter">
     <div class="mode-tabs" role="tablist" aria-label="Mode">
       <button class="mode-tab on" id="tab-rank" onclick="setMode('rank')">Rankings</button>
-      <button class="mode-tab off" id="tab-paper" onclick="setMode('paper')">Paper Trading</button>
     </div>
   </div>
   <div class="hright">
@@ -857,11 +741,11 @@ body.paper-mode #paper-stage{position:relative}
       </div>
     </div>
 
-    <p class="subhint" style="margin-top:4px">Automated signals only — no manual broker fire from this dashboard. Internal paper fills are under <strong>Paper Trading</strong>.</p>
+    <p class="subhint" style="margin-top:4px">Automated signals only. In SIM: fills are simulated with live mark prices. In LIVE: bracket order fires to Rithmic/Lucid.</p>
 
-    <!-- Test signal helper (SIM updates paper; LIVE executes bracket) -->
-    <div style="margin-top:12px;border:1px solid var(--border);border-radius:12px;padding:10px 10px;background:rgba(0,0,0,.06)">
-      <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Test Signal</div>
+    <!-- Sim Deploy Signal — fire a test signal, see P&L react as if live -->
+    <div style="margin-top:12px;border:1px solid rgba(210,180,140,.35);border-radius:12px;padding:12px;background:rgba(210,180,140,.05)">
+      <div style="font-size:10px;color:var(--gold);text-transform:uppercase;letter-spacing:.7px;font-weight:700;margin-bottom:10px">⬡ Sim Deploy Signal</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
         <select id="ts-symbol" class="profile-field" style="margin-top:0">
           <option value="RTY=F">RTY</option>
@@ -885,12 +769,15 @@ body.paper-mode #paper-stage{position:relative}
           <option value="BUY">BUY (Long)</option>
           <option value="SELL">SELL (Short)</option>
         </select>
-        <input id="ts-qty" class="profile-field" style="margin-top:0" placeholder="Qty (SIM only, default 1)" value="1" />
+        <input id="ts-qty" class="profile-field" style="margin-top:0" placeholder="Qty (default 1)" value="1" inputmode="numeric" />
       </div>
-      <button onclick="fireTestSignal()" class="hdr-profile" style="margin-top:10px;width:100%">Fire Test Signal</button>
-      <div style="margin-top:8px;font-size:10px;color:var(--muted2);line-height:1.35">
-        SIM: opens a paper position and P&amp;L will move under your main metrics.<br>
-        LIVE: sends a real bracket to Rithmic (if enabled + connected).
+      <button onclick="fireTestSignal()" style="margin-top:10px;width:100%;padding:11px;background:rgba(210,180,140,.18);border:1px solid rgba(210,180,140,.5);color:var(--gold);border-radius:8px;font-size:12px;font-weight:800;cursor:pointer;font-family:inherit;letter-spacing:.3px;transition:background .15s" id="btn-fire-sim">
+        Fire Sim Signal
+      </button>
+      <div id="ts-result" style="margin-top:8px;font-size:10px;line-height:1.5;display:none;padding:8px 10px;border-radius:6px"></div>
+      <div style="margin-top:8px;font-size:10px;color:var(--muted2);line-height:1.4">
+        SIM: simulates the full trade — entry fills at mark price, SL/TP auto-managed, P&amp;L updates every 2s.<br>
+        LIVE: sends a real bracket order to Rithmic (Lucid account).
       </div>
     </div>
 
@@ -976,90 +863,7 @@ body.paper-mode #paper-stage{position:relative}
     </div>
   </div>
 
-  <!-- PAPER TRADING -->
-  <div class="panel" id="panel-paper" style="display:none">
-    <div class="phdr">
-      <div class="ptitle">Paper Trading</div>
-      <div class="pbadge">Simulated</div>
-    </div>
-    <div class="paper-metrics" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">
-      <div style="background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px">
-        <div class="mlabel">Balance</div>
-        <div class="mval" id="paper-balance">$—</div>
-        <div class="msub" id="paper-balance-sub">Daily start: —</div>
-      </div>
-      <div style="background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px">
-        <div class="mlabel">Unrealized P&amp;L</div>
-        <div class="mval" id="paper-upnl">$—</div>
-        <div class="msub">Across open positions</div>
-      </div>
-      <div style="background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px">
-        <div class="mlabel">Daily P&amp;L</div>
-        <div class="mval" id="paper-dpnl">$—</div>
-        <div class="msub">Since daily reset</div>
-      </div>
-      <div style="background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px">
-        <div class="mlabel">Contracts</div>
-        <div class="mval" id="paper-contracts">0</div>
-        <div class="msub">Open contracts</div>
-      </div>
-    </div>
-
-    <div id="paper-workspace" class="paper-workspace">
-    <div id="paper-grid" class="paper-grid" style="--paper-col-w:380px">
-    <div id="paper-stage">
-      <div id="paper-chart-card" style="background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px">
-        <div class="mlabel" style="margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;gap:10px">
-          <span>Chart</span>
-          <span style="color:var(--muted2);font-size:10px;text-align:right;max-width:70%" id="paper-chart-status">-</span>
-        </div>
-        <div class="paper-tf-wrap" id="paper-tf-row">
-          <label for="paper-tf-select" style="font-size:10px;color:var(--muted);white-space:nowrap">Timeframe</label>
-          <select id="paper-tf-select" onchange="setPaperTf(this.value)" aria-label="Chart timeframe"></select>
-        </div>
-        <div id="paper-chart" style="height:360px;width:100%;border-radius:10px;overflow:hidden;border:1px solid var(--border);background:var(--panel2)"></div>
-      </div>
-    </div>
-    <div id="paper-splitter" class="paper-splitter" title="Drag to resize chart / order column"></div>
-
-    <div id="paper-sheet" aria-label="Scalp and order panel">
-      <div id="paper-sheet-grab" title="Drag">
-        <div class="grab-pill"></div>
-      </div>
-      <div id="paper-sheet-body">
-        <div id="paper-order-card" style="background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px">
-          <div class="mlabel" style="margin-bottom:10px">Order entry (market fill)</div>
-          <div style="display:grid;grid-template-columns:1.2fr .9fr .8fr .8fr;gap:8px;align-items:center">
-            <select id="paper-sym" style="background:var(--panel2);border:1px solid var(--border);color:var(--text);padding:10px 10px;border-radius:8px;font-family:inherit"></select>
-            <select id="paper-side" style="background:var(--panel2);border:1px solid var(--border);color:var(--text);padding:10px 10px;border-radius:8px;font-family:inherit">
-              <option value="BUY">Long (BUY)</option>
-              <option value="SELL">Short (SELL)</option>
-            </select>
-            <input id="paper-qty" placeholder="Qty" value="1" inputmode="numeric" style="background:var(--panel2);border:1px solid var(--border);color:var(--text);padding:10px 10px;border-radius:8px;font-family:inherit">
-            <button id="paper-submit" onclick="paperSubmit()" style="background:var(--green);border:none;color:#0a0320;padding:10px 12px;border-radius:8px;font-size:11px;font-weight:800;font-family:inherit;cursor:pointer">Place</button>
-          </div>
-          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;align-items:center;margin-top:8px">
-            <input id="paper-sl" placeholder="Stop loss (price)" style="background:var(--panel2);border:1px solid var(--border);color:var(--text);padding:10px 10px;border-radius:8px;font-family:inherit">
-            <input id="paper-tp" placeholder="Take profit (price)" style="background:var(--panel2);border:1px solid var(--border);color:var(--text);padding:10px 10px;border-radius:8px;font-family:inherit">
-            <input id="paper-trail" placeholder="Trailing stop (ticks)" inputmode="numeric" style="background:var(--panel2);border:1px solid var(--border);color:var(--text);padding:10px 10px;border-radius:8px;font-family:inherit">
-          </div>
-          <div class="subhint" id="paper-hint" style="margin-top:10px">Orders fill at the current mark. SL/TP/trailing are managed automatically.</div>
-        </div>
-
-        <div id="paper-positions-card" style="background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:10px">
-          <div class="mlabel">Open positions</div>
-          <div id="paper-positions" style="flex:1;min-height:120px"></div>
-        </div>
-
-        <div id="paper-trades-card" style="background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px">
-          <div class="mlabel" style="margin-bottom:10px">Trade log (paper)</div>
-          <div id="paper-trades"></div>
-        </div>
-      </div>
-    </div>
-    </div>
-    </div>
-  </div>
+    <!-- SIM POSITIONS (rendered into main Trading History) -->
 
   <!-- TRADE LOG -->
   <div class="panel" id="panel-history" style="flex:1">
@@ -1067,6 +871,7 @@ body.paper-mode #paper-stage{position:relative}
       <div class="ptitle">Trading History</div>
       <div class="pbadge" id="trade-count">0 trades</div>
     </div>
+    <div id="open-positions-container" style="margin-bottom:10px"></div>
     <div id="trade-log-container">
       <div class="empty-state">No trades yet — waiting for signals</div>
     </div>
@@ -1483,7 +1288,19 @@ async function setTradingMode(mode) {
   }
 }
 
+function _showTsResult(ok, msg) {
+  const el = document.getElementById('ts-result');
+  if (!el) return;
+  el.style.display = 'block';
+  el.style.background = ok ? '#0e2016' : '#200e0e';
+  el.style.borderLeft = `2px solid ${ok ? 'var(--green)' : '#e05555'}`;
+  el.style.color = ok ? '#b7e0c4' : '#e07070';
+  el.textContent = msg || (ok ? 'Signal fired ✓' : 'Error');
+}
+
 async function fireTestSignal(){
+  const btn = document.getElementById('btn-fire-sim');
+  if (btn) { btn.disabled = true; btn.textContent = 'Firing…'; }
   const sym = String(document.getElementById('ts-symbol')?.value || 'RTY=F').trim();
   const strategy = String(document.getElementById('ts-strategy')?.value || 'ORB').trim().toUpperCase();
   const direction = String(document.getElementById('ts-direction')?.value || 'BUY').trim().toUpperCase();
@@ -1498,20 +1315,28 @@ async function fireTestSignal(){
     });
     const j = await r.json().catch(()=> ({}));
     if (!r.ok || j.ok === false){
-      setUiStatus(false, j?.error || `test signal failed: ${r.status}`);
+      const errMsg = j?.error || `test signal failed: ${r.status}`;
+      _showTsResult(false, errMsg);
+      setUiStatus(false, errMsg);
       return;
     }
-    try{
-      const s = j?.signal || {};
-      const e = s?.entry, sl = s?.stop_loss, tp = s?.take_profit;
-      const msg = (e && sl && tp) ? `${sym} ${strategy} ${direction} E:${e} SL:${sl} TP:${tp}` : '';
-      setUiStatus(true, msg);
-    } catch { setUiStatus(true); }
-    // If SIM: paper engine mirrors immediately; if LIVE: challenge positions will update asynchronously.
+    const s = j?.signal || {};
+    const mode = j?.mode || 'SIM';
+    const e = s?.entry ? Number(s.entry).toFixed(2) : '—';
+    const sl = s?.stop_loss ? Number(s.stop_loss).toFixed(2) : '—';
+    const tp = s?.take_profit ? Number(s.take_profit).toFixed(2) : '—';
+    const msg = `[${mode}] ${sym} ${strategy} ${direction} — Entry: ${e}  SL: ${sl}  TP: ${tp}\nPosition open. SL/TP monitored — P&L updates every 2s.`;
+    _showTsResult(true, msg);
+    setUiStatus(true, `${mode} signal fired: ${sym} ${direction}`);
+    // Refresh state immediately so positions/balance update
+    await fetchState();
     await fetchPaperState();
     await fetchChallenge();
   } catch(e){
+    _showTsResult(false, e?.message || String(e));
     setUiStatus(false, e?.message || String(e));
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Fire Sim Signal'; }
   }
 }
 
@@ -1522,68 +1347,64 @@ async function resetChallenge() {
 }
 
 /* ── UPDATE UI ── */
+function _normalizeTrades(rawTrades) {
+  // Normalize both paper trades (from SIM engine) and live trades to renderTrades() format.
+  return (rawTrades || []).map(t => {
+    // Paper trade fields differ from live signal fields — unify them.
+    const isPaper = t.entry_price != null || t.side != null || t.realized_pnl_usd != null;
+    return {
+      symbol: t.symbol,
+      direction: String(t.direction || t.side || 'BUY').toUpperCase(),
+      signal_type: t.signal_type || t.type || t.note || 'SIM',
+      entry: t.entry ?? t.entry_price,
+      stop_loss: t.stop_loss,
+      pnl_usd: t.pnl_usd ?? t.pnl ?? t.realized_pnl_usd,
+      status: t.status || (isPaper ? 'CLOSED' : 'CLOSED'),
+      timestamp: t.timestamp || t.closed_at || t.opened_at || new Date().toISOString(),
+      exit_reason: t.exit_reason,
+    };
+  });
+}
+
 function updateUI() {
   try {
-    const liveEnabled = _challengeData && _challengeData.live_enabled === true;
-    const paper = _paperData || {};
+    // state.balance/daily_pnl/open_positions/trades already include paper engine data
+    // (server.py injects them into /api/state when live trading is off).
+    const bal = Number(state.balance ?? 0);
+    const startBal = Number(state.daily_start_balance ?? state.start_balance ?? bal);
+    const pnl = Number(state.daily_pnl ?? 0);
+    const pnlPct = startBal > 0 ? (pnl / startBal * 100) : 0;
 
-  const bal = liveEnabled ? (state.balance || 0) : Number(paper.balance ?? state.balance ?? 0);
-  const startBal = liveEnabled
-    ? (state.daily_start_balance || state.start_balance || bal)
-    : Number(paper.daily_start_balance ?? paper.balance ?? state.daily_start_balance ?? state.start_balance ?? bal);
-  const pnl = liveEnabled ? (state.daily_pnl || 0) : Number(paper.daily_pnl ?? state.daily_pnl ?? 0);
-  const pnlPct = startBal > 0 ? (pnl / startBal * 100) : 0;
-
-  const trades = (() => {
-    if (liveEnabled) return state.trades || [];
-    const pt = Array.isArray(paper.trades) ? paper.trades : [];
-    // Normalize paper trades to the format expected by renderTrades().
-    return pt.map(t => ({
-      symbol: t.symbol,
-      direction: String(t.side || 'BUY').toUpperCase(),
-      signal_type: (t.note || 'PAPER'),
-      entry: t.entry_price,
-      stop_loss: t.stop_loss,
-      pnl_usd: t.realized_pnl_usd,
-      status: 'CLOSED',
-      timestamp: t.closed_at || t.opened_at || Date.now(),
-    }));
-  })();
+  const rawTrades = state.trades || [];
+  const trades = _normalizeTrades(rawTrades);
 
   const closed = trades.filter(t => t.status === 'CLOSED');
   const wins = closed.filter(t => ((t.pnl_usd ?? t.pnl) || 0) > 0).length;
-  const openPos = liveEnabled
-    ? (state.open_positions || []).length
-    : (Array.isArray(paper.positions) ? paper.positions.length : 0);
+  const openPos = (state.open_positions || []).length;
 
-  const _n = (x) => (Number.isFinite(Number(x)) ? Number(x) : null);
-  const balN = _n(bal);
-  const startN = _n(startBal);
-  const pnlN = _n(pnl);
-
-  // Balance history for the small chart in both modes.
-  if (balN != null && balN > 0) {
-    balanceHistory.push({t: Date.now(), v: balN});
+  // Balance history for the small chart.
+  if (bal > 0) {
+    balanceHistory.push({t: Date.now(), v: bal});
     if (balanceHistory.length > 120) balanceHistory.shift();
   }
 
   /* balance */
   const balEl = document.getElementById('balance');
   if (balEl) {
-    balEl.textContent = balN == null ? '$—' : `$${balN.toFixed(2)}`;
+    balEl.textContent = `$${bal.toFixed(2)}`;
     balEl.className = 'mval';
   }
   const balSub = document.getElementById('balance-sub');
-  if (balSub) balSub.textContent = startN == null ? 'Start: —' : `Start: $${startN.toFixed(2)}`;
+  if (balSub) balSub.textContent = `Start: $${startBal.toFixed(2)}`;
 
   /* pnl */
   const pnlEl = document.getElementById('daily-pnl');
   if (pnlEl) {
-    pnlEl.textContent = pnlN == null ? '$—' : `${pnlN >= 0 ? '+' : ''}$${pnlN.toFixed(2)}`;
-    pnlEl.className = 'mval ' + (pnlN == null ? '' : (pnlN >= 0 ? 'green' : 'red'));
+    pnlEl.textContent = `${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}`;
+    pnlEl.className = 'mval ' + (pnl >= 0 ? 'green' : 'red');
   }
   const pnlPctEl = document.getElementById('daily-pnl-pct');
-  if (pnlPctEl) pnlPctEl.textContent = (Number.isFinite(pnlPct) ? `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(3)}% today` : '—');
+  if (pnlPctEl) pnlPctEl.textContent = `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(3)}% today`;
 
   /* positions */
   const opEl = document.getElementById('open-pos');
@@ -1609,18 +1430,18 @@ function updateUI() {
   if (tsEl) tsEl.textContent = `$${Math.max(pnl, 0).toFixed(2)} / $${targetAmt.toFixed(2)}`;
 
   /* progress bar */
-  const lossFloor = (startN ?? 0) * 0.90;
-  const drawdownPct = (startN && startN > 0 && balN != null) ? Math.max(0, (startN - balN) / startN * 100) : 0;
+  const lossFloor = startBal * 0.90;
+  const drawdownPct = (startBal > 0 && Number.isFinite(bal)) ? Math.max(0, (startBal - bal) / startBal * 100) : 0;
   const pfEl = document.getElementById('prog-floor');
-  if (pfEl) pfEl.textContent = startN == null ? '$—' : `$${lossFloor.toFixed(2)}`;
+  if (pfEl) pfEl.textContent = `$${lossFloor.toFixed(2)}`;
   const pfillEl = document.getElementById('prog-fill');
   if (pfillEl) pfillEl.style.width = `${Math.min(drawdownPct * 10, 100)}%`;
   const plEl = document.getElementById('prog-left');
   if (plEl) plEl.textContent = Number.isFinite(drawdownPct) ? `${drawdownPct.toFixed(2)}% drawdown` : '—';
   const prEl = document.getElementById('prog-right');
-  if (prEl) prEl.textContent = balN == null ? '$—' : `$${balN.toFixed(2)} current`;
+  if (prEl) prEl.textContent = `$${bal.toFixed(2)} current`;
   const ptEl = document.getElementById('prog-target');
-  if (ptEl) ptEl.textContent = startN == null ? '$—' : `$${(startN * 1.006).toFixed(2)}`;
+  if (ptEl) ptEl.textContent = `$${(startBal * 1.006).toFixed(2)}`;
 
   /* toggle */
   const btn = document.getElementById('toggle-btn');
@@ -1707,7 +1528,8 @@ function updateUI() {
   const cslEl = document.getElementById('chart-start-label');
   if (cslEl) cslEl.textContent = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric'});
 
-  /* trades */
+  /* trades + open positions */
+  renderOpenPositions(state.open_positions || []);
   renderTrades(trades);
   renderRankerLog(state.ranker_log || []);
   renderLog('ai-log', state.decision_log || []);
@@ -1812,6 +1634,41 @@ function initChartHover() {
 }
 
 /* ── TRADES ── */
+function renderOpenPositions(positions) {
+  const c = document.getElementById('open-positions-container');
+  if (!c) return;
+  if (!positions.length) { c.innerHTML = ''; return; }
+  const rows = positions.map(p => {
+    const upnl = Number(p.unrealized_pnl_usd ?? 0);
+    const upnlStr = `${upnl >= 0 ? '+' : ''}$${Math.abs(upnl).toFixed(2)}`;
+    const upnlColor = upnl > 0 ? 'var(--green)' : upnl < 0 ? '#e05555' : 'var(--muted)';
+    const side = String(p.side || 'BUY').toUpperCase();
+    const dirClass = side === 'BUY' ? 'buy' : 'sell';
+    const mark = p.mark_price ? Number(p.mark_price).toFixed(2) : '—';
+    const entry = p.entry_price ? Number(p.entry_price).toFixed(2) : '—';
+    const sl = p.stop_loss ? Number(p.stop_loss).toFixed(2) : '—';
+    const tp = p.take_profit ? Number(p.take_profit).toFixed(2) : '—';
+    const openTime = p.opened_at ? new Date(p.opened_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '—';
+    const label = p.note === 'TEST_SIGNAL' ? 'SIM' : (p.note || 'SIM');
+    return `<tr>
+      <td><span class="bdge bdge-${dirClass}">${escHtml(side)}</span></td>
+      <td style="color:#ccc">${escHtml(String(p.symbol||'').replace('=F',''))}</td>
+      <td><span class="bdge bdge-orb">${escHtml(label)}</span></td>
+      <td style="color:var(--muted)">${entry}</td>
+      <td style="color:var(--muted)">${sl}</td>
+      <td style="color:var(--muted)">${tp}</td>
+      <td style="color:var(--gold)">${mark}</td>
+      <td style="color:${upnlColor};font-weight:600">${upnlStr}</td>
+      <td style="color:#4a90d9">OPEN</td>
+      <td style="color:var(--muted2)">${openTime}</td>
+    </tr>`;
+  }).join('');
+  c.innerHTML = `<div style="margin-bottom:8px;font-size:10px;color:var(--gold);font-weight:700;text-transform:uppercase;letter-spacing:.5px">⬡ Open Positions (${positions.length})</div>
+  <table><thead><tr>
+    <th>Dir</th><th>Symbol</th><th>Type</th><th>Entry</th><th>SL</th><th>TP</th><th>Mark</th><th>Unrealized P&L</th><th>Status</th><th>Time</th>
+  </tr></thead><tbody>${rows}</tbody></table>`;
+}
+
 function renderTrades(trades) {
   const c = document.getElementById('trade-log-container');
   if (!trades.length) { c.innerHTML = '<div class="empty-state">No trades yet — waiting for signals</div>'; return; }
@@ -2256,19 +2113,11 @@ let __ignoredSymbols = [];
 
 let __mode = 'rank';
 function setMode(m){
-  const next = (m === 'paper') ? 'paper' : 'rank';
-  if (__mode === 'paper' && next !== 'paper') __paperRenderedSym = null;
-  __mode = next;
+  __mode = 'rank';
   const rank = document.getElementById('panel-rankings');
-  const paper = document.getElementById('panel-paper');
   const tR = document.getElementById('tab-rank');
-  const tP = document.getElementById('tab-paper');
-  if (rank) rank.style.display = (__mode === 'rank') ? '' : 'none';
-  if (paper) paper.style.display = (__mode === 'paper') ? '' : 'none';
-  if (tR) tR.className = 'mode-tab ' + (__mode === 'rank' ? 'on' : 'off');
-  if (tP) tP.className = 'mode-tab ' + (__mode === 'paper' ? 'on' : 'off');
-  document.body.classList.toggle('paper-mode', __mode === 'paper');
-  if (__mode === 'paper') { fetchPaperState(); ensurePaperChart(document.getElementById('paper-sym')?.value); }
+  if (rank) rank.style.display = '';
+  if (tR) tR.className = 'mode-tab on';
 }
 
 /* ── PAPER TRADING (REAL) ── */
@@ -2422,11 +2271,16 @@ async function fetchPaperState(){
     if (!r.ok) throw new Error(`/api/paper/state ${r.status}`);
     const data = await r.json();
     _paperData = data;
-    renderPaper(data);
-    // Also refresh the top-line metrics in SIM mode.
+    // Merge paper positions/trades into state so updateUI() sees them
+    if (data) {
+      if (Array.isArray(data.positions)) state.open_positions = data.positions;
+      if (Array.isArray(data.trades)) state.trades = data.trades;
+      if (data.balance != null) state.balance = data.balance;
+      if (data.daily_pnl != null) state.daily_pnl = data.daily_pnl;
+      if (data.daily_start_balance != null) state.daily_start_balance = data.daily_start_balance;
+    }
     updateUI();
-    try { setUiStatus(true); } catch {}
-  } catch(e) { try { setUiStatus(false, `paper fetch failed: ${e?.message || String(e)}`); } catch {} }
+  } catch(e) { /* silent — paper may not be initialized yet */ }
 }
 
 async function paperSubmit(){
@@ -3219,20 +3073,17 @@ function _initPaperColResize(){
 /* ── INIT ── */
 initTheme();
 initChartHover();
-initPaperTfSelect();
+try { initPaperTfSelect(); } catch(e) {}
 try { fetchState(); } catch(e) { try { setUiStatus(false, `init fetchState failed: ${e?.message || String(e)}`); } catch {} }
 try { fetchRankings(); } catch(e) { try { setUiStatus(false, `init fetchRankings failed: ${e?.message || String(e)}`); } catch {} }
 try { fetchChallenge(); } catch(e) { try { setUiStatus(false, `init fetchChallenge failed: ${e?.message || String(e)}`); } catch {} }
 try { loadContact(); } catch(e) {}
 try { fetchPaperState(); } catch(e) { try { setUiStatus(false, `init fetchPaperState failed: ${e?.message || String(e)}`); } catch {} }
-// default chart timeframe & initial load
 __chartTf = '5m';
-try { ensurePaperChart('ES'); } catch(e) { try { setUiStatus(false, `init chart failed: ${e?.message || String(e)}`); } catch {} }
-setInterval(fetchState, 5000);
+setInterval(fetchState, 2000);
 setInterval(fetchRankings, 30000);
 setInterval(fetchChallenge, 5000);
-setInterval(()=>{ if (!(_challengeData && _challengeData.live_enabled === true) || __mode === 'paper') fetchPaperState(); }, 2000);
-setInterval(()=>{ if (__mode === 'paper') { try { ensurePaperChart(document.getElementById('paper-sym')?.value); } catch {} } }, 5000);
+setInterval(fetchPaperState, 2000);
 
 // --- Mobile paper bottom-sheet drag (chart stays full screen) ---
 let __sheetY = 0; // translateY px (0 = peek, larger = drag sheet down)
