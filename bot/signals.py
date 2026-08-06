@@ -192,6 +192,64 @@ def window_is_adequate(candles, requested_days, min_fraction: float | None = Non
     return age_h <= max_stale_h
 
 
+# =====================
+# CONTRACT TICK SIZES
+# =====================
+# Minimum price increment per contract. Mirrors server.py CONTRACT_SPECS, the
+# same way copy_router.CONTRACT_SPECS and rithmic_executor._CONTRACT_SPECS do.
+#
+# Detector parameters named ``*_ticks`` (min_sweep_ticks, sl_buffer_ticks) used
+# to be multiplied by ``candles[-1]["close"] * 0.0001`` — one basis point of
+# price, which is NOT a tick. Measured against the real specs that pseudo-tick
+# is 0.35x a ZB tick and 11.8x an NQ tick, so "2 ticks" silently meant 0.7 ticks
+# on the 30-year bond and 23.6 ticks on the Nasdaq. Same knob, different filter
+# on every instrument.
+CONTRACT_TICK_SIZE: dict[str, float] = {
+    # Equity indices
+    "ES": 0.25, "NQ": 0.25, "YM": 1.0, "RTY": 0.10,
+    "MES": 0.25, "MNQ": 0.25, "MYM": 1.0,
+    # Energy
+    "CL": 0.01,
+    # Metals
+    "GC": 0.10, "MGC": 0.10, "SI": 0.005, "HG": 0.0005,
+    # Rates
+    "ZB": 0.03125, "ZN": 0.015625,
+}
+
+
+def contract_base(symbol: str) -> str:
+    """``"MGC=F"`` / ``"MGCZ5"`` -> ``"MGC"``. Longest known root wins."""
+    s = (symbol or "").upper().strip()
+    if s.endswith("=F"):
+        s = s[:-2]
+    if s in CONTRACT_TICK_SIZE:
+        return s
+    for root in sorted(CONTRACT_TICK_SIZE, key=len, reverse=True):
+        if s.startswith(root):
+            return root
+    return s
+
+
+def tick_size_for(symbol: str | None, candles=None) -> float | None:
+    """Real minimum tick for ``symbol``.
+
+    Falls back to the legacy 1bp-of-price heuristic only when the symbol is
+    unknown, so instruments we have no spec for behave exactly as before.
+    """
+    ts = CONTRACT_TICK_SIZE.get(contract_base(symbol)) if symbol else None
+    if ts:
+        return float(ts)
+    if candles:
+        return float(candles[-1]["close"]) * 0.0001
+    return None
+
+
+# How long a frozen reference range stays usable. A killzone is at most ~6h
+# after the Asia session that built it; anything older means the session was
+# missing entirely (holiday / data gap) and the stale range must not be traded.
+REFERENCE_RANGE_MAX_AGE_SEC = 18 * 3600
+
+
 # Fallback when Kraken AssetPairs discovery fails (see server ``BOT_SYMBOLS`` override).
 # CME futures universe (mini + micro where available) using Yahoo Finance futures tickers.
 # These are SIGNALS ONLY (no auto-trading).
@@ -666,6 +724,7 @@ def _detect_pine_long_only(
     is_ref_bar,
     is_trade_bar,
     ref_label: str,
+    symbol=None,
 ):
     """
     Long-only sweep + MSS + reclaim, one signal per Pine trading day.
@@ -682,7 +741,7 @@ def _detect_pine_long_only(
     interval = int(OHLC_INTERVAL_MINUTES)
     max_bars_after = max(1, (max_min_after + interval - 1) // interval)
 
-    mintick = candles[-1]["close"] * 0.0001
+    mintick = tick_size_for(symbol, candles)
     sweep_thresh = min_sweep_ticks * mintick
     sl_buf = sl_buf_ticks * mintick
 
@@ -764,7 +823,7 @@ def _detect_pine_long_only(
     return signals
 
 
-def detect_pine_ashl_signals(candles):
+def detect_pine_ashl_signals(candles, symbol=None):
     """Asia range (Pine 19:00–03:00 NY) + London trade window (03:00–06:00 NY), long only."""
     return _detect_pine_long_only(
         candles,
@@ -772,10 +831,11 @@ def detect_pine_ashl_signals(candles):
         is_asia_pine,
         is_london_pine,
         "ASHL",
+        symbol=symbol,
     )
 
 
-def detect_pine_lrny_signals(candles):
+def detect_pine_lrny_signals(candles, symbol=None):
     """London range (03:00–06:00 NY) + NY trade window (08:00–11:00 NY), long only."""
     return _detect_pine_long_only(
         candles,
@@ -783,6 +843,7 @@ def detect_pine_lrny_signals(candles):
         is_london_pine,
         is_ny_pine,
         "LRNY",
+        symbol=symbol,
     )
 
 
@@ -823,24 +884,51 @@ def calc_atr_session(candles, idx, session_fn, length=14):
 # ADAPTIVE SWING LOOKBACK — FIX 4
 # =====================
 
+_LB_BASELINE_BARS = 480  # ~2 sessions of 5m bars
+
+
 def adaptive_lookback(candles, idx, base=8, min_lb=4, max_lb=20):
     """
-    Scale swing lookback by recent volatility.
+    Scale swing lookback by recent volatility RELATIVE TO THIS INSTRUMENT'S OWN
+    recent norm.
+
     High volatility → more lookback (capture real structure).
     Low volatility  → less lookback (tighter signals).
+
+    This used to compare ``avg_range / price`` against the absolute constants
+    0.003 and 0.001. A 5-minute bar range as a fraction of price is not a
+    universal constant — it is an asset class's realised intraday volatility.
+    Equity index futures sit near 0.0005 and were therefore permanently
+    classified "low volatility" (lb=5), while gold and silver sit near 0.001
+    and 0.002 and were permanently "normal/high" (lb=8). Measured over a 30-day
+    window the result was a per-instrument constant, not an adaptation: ES
+    picked lb=5 on 87% of bars, SI picked lb=8 on 80%. The knob discriminated
+    between instruments instead of between volatility regimes.
+
+    Comparing the short window against the same instrument's longer baseline is
+    dimensionless, so "high volatility" now means high *for this instrument*.
     """
     if idx < 20:
         return base
 
-    recent_ranges = [candles[j]["high"] - candles[j]["low"]
-                     for j in range(idx - 20, idx)]
-    avg_range = sum(recent_ranges) / len(recent_ranges)
-    price     = candles[idx]["close"]
-    vol_pct   = avg_range / price  # range as % of price
+    short_ranges = [candles[j]["high"] - candles[j]["low"]
+                    for j in range(idx - 20, idx)]
+    short_avg = sum(short_ranges) / len(short_ranges)
 
-    if vol_pct > 0.003:    # high vol
+    b_start = max(0, idx - _LB_BASELINE_BARS)
+    if idx - b_start < 60:
+        return base  # not enough history to know what normal looks like
+    base_ranges = [candles[j]["high"] - candles[j]["low"]
+                   for j in range(b_start, idx)]
+    base_avg = sum(base_ranges) / len(base_ranges)
+    if base_avg <= 0:
+        return base
+
+    vol_ratio = short_avg / base_avg  # >1 = livelier than its own norm
+
+    if vol_ratio > 1.35:    # high vol for this instrument
         lb = min(base + 6, max_lb)
-    elif vol_pct < 0.001:  # low vol
+    elif vol_ratio < 0.75:  # low vol for this instrument
         lb = max(base - 3, min_lb)
     else:
         lb = base
@@ -900,15 +988,18 @@ def resolve_same_bar(bar, entry, sl, tp, direction):
 # KZ SIGNAL DETECTION
 # =====================
 
-def detect_kz_signals(candles, atr_mult=0.20, sl_atr_mult=0.10, min_sweep_ticks=0):
+def detect_kz_signals(candles, atr_mult=0.20, sl_atr_mult=0.10, min_sweep_ticks=0, symbol=None):
     signals = []
     if len(candles) < 30:
         return signals
 
-    mintick = candles[-1]["close"] * 0.0001
+    mintick = tick_size_for(symbol, candles)
 
-    asia_high = asia_low = None
-    prev_day  = None
+    asia_high = asia_low = None       # range the LIVE Asia session is building
+    asia_last_ts = None
+    ref_high = ref_low = None         # range frozen when the killzone opened
+    ref_ts = None
+    prev_in_asia = False
     swept_sell = swept_buy = False
     sweep_low  = sweep_high = None
     prev_in_kill = False
@@ -917,16 +1008,22 @@ def detect_kz_signals(candles, atr_mult=0.20, sl_atr_mult=0.10, min_sweep_ticks=
     for i in range(15, len(candles)):
         c  = candles[i]
         dt = candle_dt(c)
-        day = dt.date()
 
-        if prev_day is not None and day != prev_day:
+        in_asia = is_asia(dt)
+
+        # ``is_asia`` is 20:00-03:00 ET — it deliberately crosses midnight, and
+        # ``in_range`` has explicit wrap handling for exactly that. Resetting the
+        # accumulator on the CALENDAR date threw away every bar before 00:00,
+        # which is 57% of the session, so the "Asia range" the detector actually
+        # swept was a 00:00-03:00 range. Reset when the session itself starts.
+        # ASHL/LRNY already get this right via ``pine_trading_day_id``.
+        if in_asia and not prev_in_asia:
             asia_high = asia_low = None
 
-        prev_day = day
-
-        if is_asia(dt):
+        if in_asia:
             asia_high = max(asia_high, c["high"]) if asia_high is not None else c["high"]
             asia_low  = min(asia_low,  c["low"])  if asia_low  is not None else c["low"]
+            asia_last_ts = c["time"]
 
         in_kill    = is_london_kz(dt) or is_ny_kz(dt)
         kill_start = in_kill and not prev_in_kill
@@ -934,15 +1031,30 @@ def detect_kz_signals(candles, atr_mult=0.20, sl_atr_mult=0.10, min_sweep_ticks=
         if kill_start:
             swept_sell = swept_buy = False
             sweep_low  = sweep_high = None
+            # Freeze the reference range at the open of the killzone. is_asia
+            # (20:00-03:00) OVERLAPS is_london_kz (02:00-05:00) by a full hour,
+            # and the range was extended by the same bar that was then tested
+            # against it — so ``low < asia_low - sweep_thresh`` was
+            # unsatisfiable for the first 12 bars of every London killzone. You
+            # cannot sweep a level that moves to accommodate you.
+            ref_high, ref_low, ref_ts = asia_high, asia_low, asia_last_ts
 
-        a_valid = (asia_high is not None and asia_low is not None
-                   and asia_high > asia_low)
+        # A frozen range is only tradeable if the Asia session that built it is
+        # the one immediately preceding this killzone (guards holidays / gaps).
+        ref_fresh = (
+            ref_ts is not None
+            and 0 <= (c["time"] - ref_ts) <= REFERENCE_RANGE_MAX_AGE_SEC
+        )
+        asia_high_r, asia_low_r = ref_high, ref_low
+        a_valid = (asia_high_r is not None and asia_low_r is not None
+                   and asia_high_r > asia_low_r and ref_fresh)
 
         if in_kill and a_valid:
             # FIX 2: session-averaged ATR
             atr = calc_atr_session(candles, i, session_fn)
             if atr is None:
                 prev_in_kill = in_kill
+                prev_in_asia = in_asia
                 continue
 
             sweep_thresh = atr * atr_mult + (min_sweep_ticks * mintick)
@@ -952,7 +1064,7 @@ def detect_kz_signals(candles, atr_mult=0.20, sl_atr_mult=0.10, min_sweep_ticks=
             lb = adaptive_lookback(candles, i)
 
             # BUY SETUP
-            if c["low"] < (asia_low - sweep_thresh):
+            if c["low"] < (asia_low_r - sweep_thresh):
                 if not swept_sell:
                     swept_sell = True
                     sweep_low  = c["low"]
@@ -962,11 +1074,11 @@ def detect_kz_signals(candles, atr_mult=0.20, sl_atr_mult=0.10, min_sweep_ticks=
             if swept_sell:
                 prev_sh = swing_high(candles, i, lb)
                 mss_up  = c["high"] > prev_sh
-                reclaim = c["close"] > asia_low
+                reclaim = c["close"] > asia_low_r
 
                 # FIX 5: volume confirmation
                 if mss_up and reclaim and volume_confirms(candles, i):
-                    sl = (sweep_low - sl_buf) if sweep_low is not None else (asia_low - sl_buf)
+                    sl = (sweep_low - sl_buf) if sweep_low is not None else (asia_low_r - sl_buf)
                     signals.append({
                         "type":      "KZ",
                         "direction": "BUY",
@@ -985,7 +1097,7 @@ def detect_kz_signals(candles, atr_mult=0.20, sl_atr_mult=0.10, min_sweep_ticks=
                     sweep_low  = None
 
             # SELL SETUP
-            if c["high"] > (asia_high + sweep_thresh):
+            if c["high"] > (asia_high_r + sweep_thresh):
                 if not swept_buy:
                     swept_buy  = True
                     sweep_high = c["high"]
@@ -995,10 +1107,10 @@ def detect_kz_signals(candles, atr_mult=0.20, sl_atr_mult=0.10, min_sweep_ticks=
             if swept_buy:
                 prev_sl  = swing_low(candles, i, lb)
                 mss_down = c["low"] < prev_sl
-                reclaim  = c["close"] < asia_high
+                reclaim  = c["close"] < asia_high_r
 
                 if mss_down and reclaim and volume_confirms(candles, i):
-                    sl = (sweep_high + sl_buf) if sweep_high is not None else (asia_high + sl_buf)
+                    sl = (sweep_high + sl_buf) if sweep_high is not None else (asia_high_r + sl_buf)
                     signals.append({
                         "type":      "KZ",
                         "direction": "SELL",
@@ -1015,6 +1127,7 @@ def detect_kz_signals(candles, atr_mult=0.20, sl_atr_mult=0.10, min_sweep_ticks=
                     sweep_high = None
 
         prev_in_kill = in_kill
+        prev_in_asia = in_asia
 
     return signals
 
@@ -1023,12 +1136,13 @@ def detect_kz_signals(candles, atr_mult=0.20, sl_atr_mult=0.10, min_sweep_ticks=
 # ORB SIGNAL DETECTION
 # =====================
 
-def detect_orb_signals(candles, min_sweep_ticks=2, sl_buffer_ticks=2, max_bars_after_open=90):
+def detect_orb_signals(candles, min_sweep_ticks=2, sl_buffer_ticks=2, max_bars_after_open=90,
+                       symbol=None):
     signals = []
     if len(candles) < 30:
         return signals
 
-    mintick = candles[-1]["close"] * 0.0001
+    mintick = tick_size_for(symbol, candles)
 
     london_low  = london_high = None
     prev_day    = None
@@ -1304,15 +1418,19 @@ def _batch_stats(candles, signals, rr_target: float, max_bars: int = 150):
         return None
     winrate = round(100.0 * wins / total, 1)
     rr = float(rr_target)
-    expectancy = round((winrate / 100.0 * rr) - ((1 - winrate / 100.0) * 1.0), 3)
     avg_r = round(r_sum / total, 3)
     avg_bars = round(bars_sum / total) if total else 0
+    # Realized, not projected — see the note in backtest_symbol.score(). The RR
+    # grid search below ranks on this, otherwise it maximises a fiction and
+    # keeps picking the largest target that holds win-rate in band while the
+    # trades themselves expire short of it.
     return {
         "wins": wins,
         "losses": losses,
         "total": total,
         "winrate": winrate,
-        "expectancy": expectancy,
+        "expectancy": avg_r,
+        "projected_expectancy": round((winrate / 100.0 * rr) - ((1 - winrate / 100.0) * 1.0), 3),
         "avg_r": avg_r,
         "avg_bars": avg_bars,
     }
@@ -1426,6 +1544,8 @@ def optimize_rr_for_signals(
         "rr": float(rr_chosen),
         "winrate": st["winrate"],
         "expectancy": st["expectancy"],
+        "projected_expectancy": st.get("projected_expectancy"),
+        "objective": "realized_mean_r",
         "trades": st["total"],
         "target_lo": lo,
         "target_hi": hi,
@@ -1581,10 +1701,10 @@ def backtest_symbol(
     if not history_source.startswith("csv"):
         print(f"  {symbol}: {len(candles)} candles / {coverage}d / gaps={has_gaps}")
 
-    kz_sigs   = detect_kz_signals(candles)
-    orb_sigs  = detect_orb_signals(candles)
-    ashl_sigs = detect_pine_ashl_signals(candles)
-    lrny_sigs = detect_pine_lrny_signals(candles)
+    kz_sigs   = detect_kz_signals(candles, symbol=symbol)
+    orb_sigs  = detect_orb_signals(candles, symbol=symbol)
+    ashl_sigs = detect_pine_ashl_signals(candles, symbol=symbol)
+    lrny_sigs = detect_pine_lrny_signals(candles, symbol=symbol)
 
     auto_rr = os.environ.get("AUTO_RR_OPTIMIZE", "1").strip().lower() in ("1", "true", "yes")
     cache_row = load_optimized_rr_cache().get(symbol, {})
@@ -1595,7 +1715,8 @@ def backtest_symbol(
         if not signals:
             return {"total": 0, "wins": 0, "losses": 0, "winrate": 0.0,
                     "avg_r": 0.0, "avg_bars": 0, "expectancy": 0.0,
-                    "recent_expectancy": 0.0,
+                    "projected_expectancy": 0.0,
+                    "recent_expectancy": 0.0, "recent_window_trades": 0,
                     "signals": []}
 
         wins = losses = 0
@@ -1619,22 +1740,43 @@ def backtest_symbol(
         if total == 0:
             return {"total": 0, "wins": 0, "losses": 0, "winrate": 0.0,
                     "avg_r": 0.0, "avg_bars": 0, "expectancy": 0.0,
-                    "recent_expectancy": 0.0,
+                    "projected_expectancy": 0.0,
+                    "recent_expectancy": 0.0, "recent_window_trades": 0,
                     "signals": signals}
 
         winrate    = round(wins / total * 100, 1)
         avg_r      = round(r_sum / total, 3)
         avg_bars   = round(bars_sum / total)
-        expectancy = round((winrate/100 * rr_target) - ((1 - winrate/100) * 1), 3)
-        # Recent expectancy proxy: average pnl_r over last N trades (more regime-adaptive).
-        # This is not perfect but tracks the realized edge better than winrate alone.
-        recent_n = int(os.environ.get("RECENT_WINDOW_TRADES", "60"))
-        tail = pnl_series[-max(1, min(recent_n, len(pnl_series))):]
-        recent_expectancy = round(sum(tail) / max(1, len(tail)), 3) if tail else 0.0
+
+        # ``expectancy`` is the REALIZED mean R of the trades this leg actually
+        # produced — the same pnl_r that every signal carries in
+        # ``signal["backtest"]["pnl_r"]``.
+        #
+        # It used to be ``winrate * rr_target - (1 - winrate)``, which projects
+        # that every winner is paid the full RR target. Most winners exit
+        # "EXPIRED" far short of target, so that formula advertised a forecast as
+        # a backtest result — 15 of 52 live legs showed a positive expectancy
+        # while their own shipped trades lost money. The projection is kept under
+        # ``projected_expectancy`` because it is still what a fixed-RR plan would
+        # earn IF every target filled.
+        expectancy = avg_r
+        projected_expectancy = round((winrate/100 * rr_target) - ((1 - winrate/100) * 1), 3)
+
+        # Genuinely recent: the tail must be a strict subset for the label to
+        # mean anything. The old default of 60 exceeded every leg's trade count
+        # (max 47), so recent_expectancy equalled avg_r verbatim on all 52 legs.
+        recent_n = int(os.environ.get("RECENT_WINDOW_TRADES", "20"))
+        recent_n = max(3, recent_n)
+        used = max(1, min(recent_n, len(pnl_series)))
+        tail = pnl_series[-used:]
+        recent_expectancy = round(sum(tail) / len(tail), 3) if tail else 0.0
 
         return {"total": total, "wins": wins, "losses": losses,
                 "winrate": winrate, "avg_r": avg_r, "avg_bars": avg_bars,
-                "expectancy": expectancy, "recent_expectancy": recent_expectancy,
+                "expectancy": expectancy,
+                "projected_expectancy": projected_expectancy,
+                "recent_expectancy": recent_expectancy,
+                "recent_window_trades": len(tail),
                 "signals": signals}
 
     def resolve_rr(leg: str, sigs, fallback_rr: float) -> tuple:
