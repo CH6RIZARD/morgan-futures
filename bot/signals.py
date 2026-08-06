@@ -57,6 +57,141 @@ def _local_tail_bar_count(days: int, interval: int = OHLC_INTERVAL_MINUTES) -> i
     return max(bars_per_day, int(days) * bars_per_day)
 
 
+# =====================
+# LOOKBACK WINDOW (explicit + configurable)
+# =====================
+
+# Default backtest lookback in calendar days. Overridable per-call
+# (``backtest_symbol(..., lookback_days=N)``) or by env ``BACKTEST_LOOKBACK_DAYS``.
+DEFAULT_BACKTEST_LOOKBACK_DAYS = 30
+
+# How far back Yahoo will actually serve intraday bars, per interval (calendar days).
+# 1m is capped near a week; 2m-90m near two months; hourly is multi-year.
+YF_INTRADAY_MAX_DAYS = {1: 7, 2: 60, 5: 60, 15: 60, 30: 60, 60: 730, 90: 60}
+
+_PERIOD_UNIT_DAYS = {"d": 1, "wk": 7, "mo": 30, "y": 365}
+
+
+def _parse_period_days(period: str) -> int | None:
+    """Turn a Yahoo-style period string ('30d', '1mo', '2y') into calendar days."""
+    p = (period or "").strip().lower()
+    if not p:
+        return None
+    for unit in ("mo", "wk", "d", "y"):
+        if p.endswith(unit):
+            head = p[: -len(unit)].strip()
+            try:
+                return max(1, int(round(float(head) * _PERIOD_UNIT_DAYS[unit])))
+            except ValueError:
+                return None
+    return None
+
+
+def resolve_lookback_days(explicit=None) -> int:
+    """
+    Resolve the backtest lookback window, in calendar days.
+
+    Precedence: explicit argument > ``BACKTEST_LOOKBACK_DAYS`` env >
+    legacy ``YF_INTRADAY_PERIOD`` env > ``DEFAULT_BACKTEST_LOOKBACK_DAYS``.
+    """
+    if explicit is not None:
+        try:
+            v = int(float(explicit))
+            if v > 0:
+                return v
+        except (TypeError, ValueError):
+            pass
+
+    raw = os.environ.get("BACKTEST_LOOKBACK_DAYS", "").strip()
+    if raw:
+        try:
+            v = int(float(raw))
+            if v > 0:
+                return v
+        except ValueError:
+            pass
+
+    legacy = _parse_period_days(os.environ.get("YF_INTRADAY_PERIOD", ""))
+    if legacy:
+        return legacy
+
+    return DEFAULT_BACKTEST_LOOKBACK_DAYS
+
+
+def provider_max_intraday_days(interval: int = OHLC_INTERVAL_MINUTES) -> int:
+    """Max calendar days the intraday provider will serve for ``interval``."""
+    raw = os.environ.get("YF_MAX_INTRADAY_DAYS", "").strip()
+    if raw:
+        try:
+            v = int(float(raw))
+            if v > 0:
+                return v
+        except ValueError:
+            pass
+    return YF_INTRADAY_MAX_DAYS.get(int(interval), 60)
+
+
+def candle_window_info(candles, requested_days=None, source: str | None = None) -> dict:
+    """
+    Describe the window a candle list ACTUALLY covers.
+
+    Always returns ``bars`` / ``first_bar_utc`` / ``last_bar_utc`` / ``days_covered``
+    so callers can render "30d requested / 7d available" instead of silently
+    presenting a short window as if it were the full one.
+    """
+    bars = len(candles or [])
+    first_ts = candles[0]["time"] if bars else None
+    last_ts = candles[-1]["time"] if bars else None
+    days_covered = round((last_ts - first_ts) / 86400.0, 2) if bars > 1 else 0.0
+
+    info = {
+        "bars": bars,
+        "first_bar_utc": (
+            datetime.fromtimestamp(first_ts, tz=timezone.utc).isoformat() if first_ts else None
+        ),
+        "last_bar_utc": (
+            datetime.fromtimestamp(last_ts, tz=timezone.utc).isoformat() if last_ts else None
+        ),
+        "days_covered": days_covered,
+    }
+
+    if requested_days is not None:
+        req = int(requested_days)
+        info["lookback_days_requested"] = req
+        info["lookback_days_available"] = days_covered
+        info["window_truncated"] = bool(days_covered + 0.5 < req)
+        note = f"{req}d requested / {days_covered:g}d available"
+        if source:
+            note += f" ({source})"
+        info["window_note"] = note
+    if source:
+        info["window_source"] = source
+    return info
+
+
+def window_is_adequate(candles, requested_days, min_fraction: float | None = None) -> bool:
+    """True when ``candles`` cover enough of the requested window AND end recently."""
+    if not candles or len(candles) < 2:
+        return False
+    if min_fraction is None:
+        try:
+            min_fraction = float(os.environ.get("BACKTEST_MIN_COVERAGE_FRAC", "0.8"))
+        except ValueError:
+            min_fraction = 0.8
+    min_fraction = max(0.05, min(min_fraction, 1.0))
+
+    covered = (candles[-1]["time"] - candles[0]["time"]) / 86400.0
+    if covered < float(requested_days) * min_fraction:
+        return False
+
+    try:
+        max_stale_h = float(os.environ.get("BACKTEST_MAX_CACHE_STALE_HOURS", "48"))
+    except ValueError:
+        max_stale_h = 48.0
+    age_h = (time.time() - candles[-1]["time"]) / 3600.0
+    return age_h <= max_stale_h
+
+
 # Fallback when Kraken AssetPairs discovery fails (see server ``BOT_SYMBOLS`` override).
 # CME futures universe (mini + micro where available) using Yahoo Finance futures tickers.
 # These are SIGNALS ONLY (no auto-trading).
@@ -92,26 +227,38 @@ if _env_syms:
 # DATA FETCHING ? FIX 1 — FIX 1
 # =====================
 
-def fetch_ohlc_interval(symbol, interval=OHLC_INTERVAL_MINUTES, retries=3):
+def fetch_ohlc_interval(symbol, interval=OHLC_INTERVAL_MINUTES, retries=3, days_back=None):
     '''Fetch OHLC using Yahoo Finance intraday bars.
+
+    ``days_back`` is the calendar-day lookback to assemble (default resolves via
+    ``resolve_lookback_days``). Requests longer than the provider's per-request
+    intraday cap are paged into chunks and merged; whatever the provider will
+    not serve is simply absent from the result (the caller reports the real
+    window rather than pretending the short window was the requested one).
 
     Returns (candles, coverage_days, has_gaps). Best-effort gap detection.
     '''
-    def _yahoo_chart(period: str) -> pd.DataFrame | None:
+    def _yahoo_chart(period: str | None = None, start: int | None = None,
+                     end: int | None = None) -> pd.DataFrame | None:
         """
         Fetch intraday OHLC via Yahoo's public chart endpoint.
 
+        Either ``period`` (range string) or a ``start``/``end`` epoch-second window.
         This avoids some common `yfinance` JSON decode failures (rate-limit / HTML responses).
         """
         sym = str(symbol)
         intv = f"{int(interval)}m"
         url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}"
         params = {
-            "range": period,
             "interval": intv,
             "includePrePost": "false",
             "events": "div|split|earn",
         }
+        if start is not None and end is not None:
+            params["period1"] = int(start)
+            params["period2"] = int(end)
+        else:
+            params["range"] = period
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
             "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -161,102 +308,143 @@ def fetch_ohlc_interval(symbol, interval=OHLC_INTERVAL_MINUTES, retries=3):
         df = df.set_index("Datetime")
         return df[["Open", "High", "Low", "Close", "Volume"]]
 
-    last_err = None
     yf_interval = f"{int(interval)}m"
-    # yfinance allows limited intraday depth per interval (5m typically up to ~60d).
-    # Use a longer default window so backtests actually have enough bars.
-    yf_period = os.environ.get("YF_INTRADAY_PERIOD", "30d").strip() or "30d"
-    for attempt in range(retries):
-        try:
-            # 1) Prefer direct Yahoo chart API.
-            df = _yahoo_chart(yf_period)
-            if df is None or getattr(df, "empty", False):
-                # 2) Fall back to yfinance.
-                df = yf.download(
-                    tickers=str(symbol),
-                    period=yf_period,
-                    interval=yf_interval,
-                    progress=False,
-                    auto_adjust=False,
-                    prepost=False,
-                    threads=False,
-                )
-            # Fallback path: sometimes `download` fails with transient JSON decode errors.
-            if df is None or getattr(df, "empty", False):
-                try:
-                    df = yf.Ticker(str(symbol)).history(
-                        period=yf_period,
-                        interval=yf_interval,
-                        auto_adjust=False,
-                        prepost=False,
-                    )
-                except Exception:
-                    pass
-            if df is None or df.empty:
-                return [], 0, True
+    requested_days = resolve_lookback_days(days_back)
+    chunk_days = max(1, provider_max_intraday_days(interval))
 
-            df = _flatten_yf_columns(df)
+    # Page the request: one chunk when the window fits the provider cap, several
+    # (newest first) when the caller asks for more than one request can return.
+    end_ts = int(time.time())
+    floor_ts = end_ts - requested_days * 86400
+    windows = []
+    cur_end = end_ts
+    while cur_end > floor_ts and len(windows) < 24:
+        cur_start = max(floor_ts, cur_end - chunk_days * 86400)
+        windows.append((cur_start, cur_end))
+        if cur_start <= floor_ts:
+            break
+        cur_end = cur_start
 
-            out = []
-            for ts, row in df.iterrows():
-                try:
-                    dt = ts.to_pydatetime()
-                    # yfinance often returns tz-naive timestamps that are *already*
-                    # in the market's local timezone. Treating them as UTC shifts
-                    # sessions (Asia/London/NY windows) and produces 0 signals.
-                    # For our futures session logic we standardize to NY time.
-                    if dt.tzinfo is None:
-                        dt = dt.replace(tzinfo=ET)
-                    dt_et = dt.astimezone(ET)
-                    t0 = int(dt_et.timestamp())
-                    o = _yf_float(row, "Open")
-                    hi = _yf_float(row, "High")
-                    lo = _yf_float(row, "Low")
-                    cl = _yf_float(row, "Close")
-                    vol = _yf_float(row, "Volume")
-                    if not all(map(lambda x: x == x, (o, hi, lo, cl))):
-                        continue
-                    out.append({
-                        "time": t0,
-                        "open": o,
-                        "high": hi,
-                        "low": lo,
-                        "close": cl,
-                        "volume": vol if vol == vol else 0.0,
-                    })
-                except Exception:
+    def _rows_from_df(df) -> list:
+        rows = []
+        if df is None or getattr(df, "empty", True):
+            return rows
+        df = _flatten_yf_columns(df)
+        for ts, row in df.iterrows():
+            try:
+                dt = ts.to_pydatetime()
+                # yfinance often returns tz-naive timestamps that are *already*
+                # in the market's local timezone. Treating them as UTC shifts
+                # sessions (Asia/London/NY windows) and produces 0 signals.
+                # For our futures session logic we standardize to NY time.
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=ET)
+                dt_et = dt.astimezone(ET)
+                t0 = int(dt_et.timestamp())
+                o = _yf_float(row, "Open")
+                hi = _yf_float(row, "High")
+                lo = _yf_float(row, "Low")
+                cl = _yf_float(row, "Close")
+                vol = _yf_float(row, "Volume")
+                if not all(map(lambda x: x == x, (o, hi, lo, cl))):
                     continue
+                rows.append({
+                    "time": t0,
+                    "open": o,
+                    "high": hi,
+                    "low": lo,
+                    "close": cl,
+                    "volume": vol if vol == vol else 0.0,
+                })
+            except Exception:
+                continue
+        return rows
 
-            out.sort(key=lambda x: x["time"])
-            if len(out) < 50:
-                return [], 0, True
+    last_err = None
+    merged: dict[int, dict] = {}
+    empty_streak = 0
 
-            oldest = out[0]["time"]
-            newest = out[-1]["time"]
-            coverage_days = (newest - oldest) / 86400.0
-            interval_sec = int(interval) * 60
-            expected = int((newest - oldest) / interval_sec) if newest > oldest else len(out)
-            actual = len(out)
-            gap_pct = 1.0 - (actual / max(1, expected))
-            has_gaps = gap_pct > 0.15
-            return out, round(coverage_days, 1), has_gaps
-        except Exception as e:
-            last_err = str(e)
-            # Yahoo will occasionally rate-limit/captcha. Back off harder.
-            time.sleep(1.5 * (attempt + 1))
+    for w_idx, (w_start, w_end) in enumerate(windows):
+        got = 0
+        for attempt in range(max(1, retries)):
+            try:
+                df = _yahoo_chart(start=w_start, end=w_end)
+                # Only the newest window is worth the noisy yfinance fallback; older
+                # windows come back empty because the provider caps intraday depth.
+                if (df is None or getattr(df, "empty", False)) and w_idx == 0:
+                    # Fall back to yfinance for this window.
+                    span_days = max(1, int(round((w_end - w_start) / 86400.0)))
+                    try:
+                        df = yf.download(
+                            tickers=str(symbol),
+                            start=datetime.fromtimestamp(w_start, tz=timezone.utc),
+                            end=datetime.fromtimestamp(w_end, tz=timezone.utc),
+                            interval=yf_interval,
+                            progress=False,
+                            auto_adjust=False,
+                            prepost=False,
+                            threads=False,
+                        )
+                    except Exception:
+                        df = None
+                    if df is None or getattr(df, "empty", True):
+                        try:
+                            df = yf.Ticker(str(symbol)).history(
+                                period=f"{span_days}d",
+                                interval=yf_interval,
+                                auto_adjust=False,
+                                prepost=False,
+                            )
+                        except Exception:
+                            df = None
 
-    print(f"Fetch error {symbol} [{interval}m] after {retries} tries: {last_err}")
-    return [], 0, True
+                rows = _rows_from_df(df)
+                for c in rows:
+                    if w_start - 86400 <= c["time"] <= w_end + 86400:
+                        merged[c["time"]] = c
+                got = len(rows)
+                break
+            except Exception as e:
+                last_err = str(e)
+                # Yahoo will occasionally rate-limit/captcha. Back off harder.
+                time.sleep(1.5 * (attempt + 1))
 
-def fetch_candles_paginated(symbol, interval=OHLC_INTERVAL_MINUTES, days_back=90):
+        if got == 0:
+            empty_streak += 1
+            # Provider has stopped serving history this far back — stop paging
+            # rather than burning requests on windows it will never fill.
+            if empty_streak >= 2:
+                break
+        else:
+            empty_streak = 0
+
+    out = [merged[t] for t in sorted(merged)]
+
+    if len(out) < 50:
+        if last_err:
+            print(f"Fetch error {symbol} [{interval}m] after {retries} tries: {last_err}")
+        return [], 0, True
+
+    oldest = out[0]["time"]
+    newest = out[-1]["time"]
+    coverage_days = (newest - oldest) / 86400.0
+    interval_sec = int(interval) * 60
+    expected = int((newest - oldest) / interval_sec) if newest > oldest else len(out)
+    actual = len(out)
+    gap_pct = 1.0 - (actual / max(1, expected))
+    has_gaps = gap_pct > 0.15
+    return out, round(coverage_days, 1), has_gaps
+
+def fetch_candles_paginated(symbol, interval=OHLC_INTERVAL_MINUTES, days_back=None):
     """
-    Fetch Kraken OHLC (5m by default). REST caps ~720 bars (~2.5d on 5m).
+    Fetch intraday OHLC covering ``days_back`` calendar days (paged as needed).
 
-    ``days_back`` is desired depth for logging only; Kraken cannot return more.
+    ``days_back`` is now honoured end-to-end: it selects the fetch window instead
+    of being logged and discarded. ``None`` resolves via ``resolve_lookback_days``.
 
     Returns (candles, coverage_days, has_gaps).
     """
-    return fetch_ohlc_interval(symbol, interval=interval, retries=4)
+    return fetch_ohlc_interval(symbol, interval=interval, retries=4, days_back=days_back)
 
 
 def fetch_daily_ohlc(symbol, retries=3):
@@ -1251,116 +1439,121 @@ def optimize_rr_for_signals(
 def backtest_symbol(
     symbol,
     interval=OHLC_INTERVAL_MINUTES,
-    days_back=90,
+    days_back=None,
     rr_target_kz=1.0,
     rr_target_orb=1.0,
     rr_target_ashl=1.0,
     rr_target_lrny=1.0,
     min_candles=100,
+    lookback_days=None,
 ):
     """Full backtest with gap detection and real simulation.
 
-    Intraday path:
-      - If ``HISTORY_CSV_DIR`` contains ``{symbol}.csv`` with enough 5m rows, those
-        bars are used (tail window ``BACKTEST_LOCAL_TAIL_DAYS``, default ~6 months).
-      - Else Kraken REST 5m (~720 bars, ~2.5d).
+    Window:
+      ``lookback_days`` (or legacy ``days_back``, or env ``BACKTEST_LOOKBACK_DAYS``,
+      default 30 calendar days) selects how much history is assembled. Every
+      candidate source is scored on the window it ACTUALLY covers — a cached CSV
+      is only preferred when it spans most of the requested window and is recent.
+      A short/stale cache no longer wins over a fresh multi-week fetch.
 
-    Long context (always when Kraken reachable):
-      - Parallel 1d OHLC (~720 daily bars) for multi-month return/vol metadata.
+    Intraday sources (best real coverage wins):
+      - ``{symbol}.csv`` from ``HISTORY_CSV_DIR`` / the auto-fetch cache
+        (tail window ``BACKTEST_LOCAL_TAIL_DAYS``, default ~6 months)
+      - live intraday fetch, paged across the requested window
+
+    Long context:
+      - Parallel 1d OHLC for multi-month return/vol metadata.
 
     On success returns stats dict. On skip (insufficient history) returns
     {\"_skip\": True, ...} so callers can log before deploy.
 
-    ``min_candles`` requests a minimum bar count. Kraken REST 5m cannot exceed ~720
-    bars unless ``HISTORY_CSV_DIR`` provides longer 5m series.
+    The result always carries the true window (``bars``, ``first_bar_utc``,
+    ``last_bar_utc``, ``days_covered``, ``window_note``) so the UI can show
+    "30d requested / 7d available" rather than implying the full window.
     """
     print(f"Backtesting {symbol}...")
     need_req = max(30, int(min_candles))
     kraken_cap = max(30, KRAKEN_OHLC_MAX_BARS - 10)
 
-    history_source = "kraken_rest_5m"
+    lookback = resolve_lookback_days(lookback_days if lookback_days is not None else days_back)
+    provider_cap_days = provider_max_intraday_days(interval)
+
     tail_days = int(os.environ.get("BACKTEST_LOCAL_TAIL_DAYS", "183"))
-    max_local = _local_tail_bar_count(tail_days, interval)
+    max_local = _local_tail_bar_count(max(tail_days, lookback), interval)
 
-    loaded = load_symbol_csv_5m(symbol)
-    if loaded:
-        raw_local, csv_path = loaded
+    def _coverage(rows) -> float:
+        if not rows or len(rows) < 2:
+            return 0.0
+        return (rows[-1]["time"] - rows[0]["time"]) / 86400.0
+
+    # ---- candidate sources -------------------------------------------------
+    candidates = []  # (candles, source_label, has_gaps)
+
+    def _add_csv(loaded_pair) -> list:
+        if not loaded_pair:
+            return []
+        raw_local, csv_path = loaded_pair
         use = raw_local[-max_local:] if len(raw_local) > max_local else raw_local
-        # Prefer CSV when it meets the requested depth, or when it beats Kraken's REST cap
-        # (do not treat min(need_req, 710) as the CSV gate — that accepts 800 bars when 50k were requested).
-        if len(use) >= need_req:
-            candles = use
-            coverage = (candles[-1]["time"] - candles[0]["time"]) / 86400 if len(candles) > 1 else 0.0
-            has_gaps = False
-            history_source = f"csv:{csv_path}"
-            need = need_req
-            print(f"  {symbol}: {len(candles)} candles from CSV / ~{coverage:.1f}d / gaps={has_gaps}")
-        elif len(use) > kraken_cap:
-            # Some repos contain shallow CSVs (~Kraken REST depth). If the user requested
-            # deep history (need_req > Kraken cap), try auto-fetch to replace the shallow CSV.
-            if need_req > kraken_cap and len(use) < need_req:
-                try:
-                    ensure_symbol_history_5m(symbol, days=int(days_back), min_rows=int(need_req))
-                except Exception:
-                    pass
-                loaded2 = load_symbol_csv_5m(symbol)
-                if loaded2:
-                    raw2, csv2 = loaded2
-                    use2 = raw2[-max_local:] if len(raw2) > max_local else raw2
-                    if len(use2) > len(use):
-                        raw_local, csv_path = raw2, csv2
-                        use = use2
+        candidates.append((use, f"csv:{csv_path}", False))
+        return use
 
-            candles = use
-            coverage = (candles[-1]["time"] - candles[0]["time"]) / 86400 if len(candles) > 1 else 0.0
-            has_gaps = False
-            history_source = f"csv:{csv_path}"
-            need = min(need_req, len(candles))
-            if need < need_req:
-                print(
-                    f"  {symbol}: CSV {len(candles)} bars < BACKTEST_MIN_CANDLES={need_req}; "
-                    f"using best available (need={need})"
-                )
-            print(f"  {symbol}: {len(candles)} candles from CSV / ~{coverage:.1f}d / gaps={has_gaps}")
-        else:
-            candles, coverage, has_gaps = fetch_candles_paginated(
-                symbol, interval=interval, days_back=days_back
-            )
-            need = min(need_req, kraken_cap)
+    csv_rows = _add_csv(load_symbol_csv_5m(symbol))
+
+    if not window_is_adequate(csv_rows, lookback):
+        if csv_rows:
             print(
-                f"  {symbol}: CSV only {len(use)} bars (need {need_req} or >{kraken_cap} for CSV); "
-                f"Kraken REST (need={need})"
+                f"  {symbol}: cached CSV covers only ~{_coverage(csv_rows):.1f}d "
+                f"({len(csv_rows)} bars) of the {lookback}d window - refreshing"
             )
-    else:
-        # No local history. Try auto-fetching deep 5m history (Coinbase public) into cache,
-        # then reload. This makes it practical to qualify >=8 symbols without manually curating CSVs.
         if interval == OHLC_INTERVAL_MINUTES:
-            ensure_symbol_history_5m(symbol, days=int(days_back), min_rows=int(need_req))
-            loaded2 = load_symbol_csv_5m(symbol)
-            if loaded2:
-                raw_local, csv_path = loaded2
-                use = raw_local[-max_local:] if len(raw_local) > max_local else raw_local
-                candles = use
-                coverage = (candles[-1]["time"] - candles[0]["time"]) / 86400 if len(candles) > 1 else 0.0
-                has_gaps = False
-                history_source = f"csv:{csv_path}"
-                need = min(need_req, len(candles))
-            else:
-                candles, coverage, has_gaps = fetch_candles_paginated(
-                    symbol, interval=interval, days_back=days_back
-                )
-                need = min(need_req, kraken_cap)
-        else:
-            candles, coverage, has_gaps = fetch_candles_paginated(
-                symbol, interval=interval, days_back=days_back
+            try:
+                ensure_symbol_history_5m(symbol, days=int(lookback), min_rows=int(need_req))
+            except Exception:
+                pass
+            _add_csv(load_symbol_csv_5m(symbol))
+
+        best_csv = max((_coverage(c) for c, _, _ in candidates), default=0.0)
+        if not any(window_is_adequate(c, lookback) for c, _, _ in candidates):
+            live, live_cov, live_gaps = fetch_candles_paginated(
+                symbol, interval=interval, days_back=lookback
             )
-            need = min(need_req, kraken_cap)
-        # Don't spam warnings during long runs; only warn when no CSV history is available.
-        if need_req > kraken_cap:
-            print(
-                f"  {symbol}: requested BACKTEST_MIN_CANDLES={need_req} but Kraken 5m REST caps ~{kraken_cap}. "
-                f"Using {need} bars. For true multi-month 5m edges, ensure `{symbol}.csv` exists in HISTORY_CSV_DIR."
-            )
+            if live:
+                candidates.append((live, f"yahoo_intraday_{int(interval)}m", live_gaps))
+                if best_csv > 0:
+                    print(
+                        f"  {symbol}: live fetch {len(live)} bars / ~{live_cov}d "
+                        f"beats cache (~{best_csv:.1f}d)"
+                    )
+
+    if not candidates:
+        candidates.append(([], "none", True))
+
+    # Pick the source that genuinely covers the most history (ties → more bars).
+    candles, history_source, has_gaps = max(
+        candidates, key=lambda t: (round(_coverage(t[0]), 2), len(t[0]))
+    )
+    coverage = round(_coverage(candles), 2)
+    # Never skip a source that is deeper than the REST cap just because an
+    # aspirational BACKTEST_MIN_CANDLES was set (matches the previous CSV branch).
+    need = (
+        need_req
+        if len(candles) >= need_req
+        else min(need_req, max(kraken_cap, len(candles)))
+    )
+
+    window = candle_window_info(candles, requested_days=lookback, source=history_source)
+    window["provider_max_days"] = provider_cap_days
+    window["interval_minutes"] = int(interval)
+    if window.get("window_truncated"):
+        reason = (
+            f"provider caps {int(interval)}m history near {provider_cap_days}d"
+            if coverage <= provider_cap_days + 1
+            else "provider returned no bars older than this"
+        )
+        print(f"  {symbol}: WINDOW SHORT - {window['window_note']} ({reason})")
+
+    if candles and history_source.startswith("csv"):
+        print(f"  {symbol}: {len(candles)} candles from CSV / ~{coverage:.1f}d / gaps={has_gaps}")
 
     daily_candles, daily_cov, daily_gaps = fetch_daily_ohlc(symbol)
     daily_ctx = compute_daily_context(daily_candles) if daily_candles else None
@@ -1371,7 +1564,7 @@ def backtest_symbol(
             f"(need {need}+), ~{coverage}d coverage ({history_source})"
         )
         print(f"  {symbol}: SKIP — {detail}")
-        return {
+        skipped = {
             "_skip": True,
             "symbol": symbol,
             "detail": detail,
@@ -1382,6 +1575,8 @@ def backtest_symbol(
             "history_source": history_source,
             "daily_context": daily_ctx,
         }
+        skipped.update(window)
+        return skipped
 
     if not history_source.startswith("csv"):
         print(f"  {symbol}: {len(candles)} candles / {coverage}d / gaps={has_gaps}")
@@ -1497,7 +1692,7 @@ def backtest_symbol(
         "stats": daily_ctx,
     }
 
-    return {
+    result = {
         "symbol":    symbol,
         "interval":  interval,
         "days_back": coverage,
@@ -1511,4 +1706,9 @@ def backtest_symbol(
         "ASHL":      ashl,
         "LRNY":      lrny,
         "score":     round(composite, 2),
+        # Total simulated trades across all legs — what "trade count" means in the UI.
+        "trades":    int(kz["total"] + orb["total"] + ashl["total"] + lrny["total"]),
     }
+    # Additive only: existing keys above are untouched, the real window is appended.
+    result.update(window)
+    return result

@@ -131,6 +131,56 @@ def _auto_cache_dir() -> str:
     return os.path.normpath(d)
 
 
+def csv_window_info(candles: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """bars / first / last / days_covered / age_hours for a loaded candle list."""
+    bars = len(candles or [])
+    first_ts = candles[0]["time"] if bars else None
+    last_ts = candles[-1]["time"] if bars else None
+    return {
+        "bars": bars,
+        "first_ts": first_ts,
+        "last_ts": last_ts,
+        "days_covered": round((last_ts - first_ts) / 86400.0, 2) if bars > 1 else 0.0,
+        "age_hours": round((time.time() - last_ts) / 3600.0, 2) if last_ts else None,
+    }
+
+
+def cache_is_fresh_enough(
+    candles: List[Dict[str, Any]],
+    days: int,
+    min_rows: int,
+    min_fraction: Optional[float] = None,
+    max_stale_hours: Optional[float] = None,
+) -> bool:
+    """
+    Is a cached CSV good enough to use instead of refetching?
+
+    Row count ALONE is not enough: a 300-row 5m file is ~1 day of history, which
+    silently satisfied ``len >= min_rows`` and pinned backtests to "yesterday".
+    We also require it to span most of the requested window and to end recently.
+    """
+    if not candles or len(candles) < max(2, int(min_rows)):
+        return False
+
+    if min_fraction is None:
+        try:
+            min_fraction = float(os.environ.get("HISTORY_MIN_COVERAGE_FRAC", "0.8"))
+        except ValueError:
+            min_fraction = 0.8
+    min_fraction = max(0.05, min(min_fraction, 1.0))
+
+    if max_stale_hours is None:
+        try:
+            max_stale_hours = float(os.environ.get("HISTORY_MAX_STALE_HOURS", "48"))
+        except ValueError:
+            max_stale_hours = 48.0
+
+    info = csv_window_info(candles)
+    if info["days_covered"] < float(days) * min_fraction:
+        return False
+    return (info["age_hours"] or 0.0) <= float(max_stale_hours)
+
+
 def _coinbase_products() -> set[str]:
     r = requests.get(_COINBASE, timeout=45, headers={"User-Agent": "trading-bot-v4-history/1.0"})
     r.raise_for_status()
@@ -184,9 +234,10 @@ def ensure_symbol_history_5m(symbol: str, days: int = 183, min_rows: int = 30_00
     cache_dir = _auto_cache_dir()
     path = os.path.join(cache_dir, f"{symbol}.csv")
 
-    # If we already have enough rows, don't refetch.
+    # Reuse the cache only when it has enough rows AND spans most of the requested
+    # window AND is recent. A short or stale file must be refetched, not returned.
     existing = load_symbol_csv_5m(symbol)
-    if existing and len(existing[0]) >= int(min_rows):
+    if existing and cache_is_fresh_enough(existing[0], days, min_rows):
         return existing[1]
     if os.path.isfile(path):
         # If cache file exists, try reading it directly even if HISTORY_CSV_DIR points elsewhere.
@@ -194,7 +245,7 @@ def ensure_symbol_history_5m(symbol: str, days: int = 183, min_rows: int = 30_00
         try:
             os.environ["HISTORY_CSV_DIR"] = cache_dir
             cached = load_symbol_csv_5m(symbol)
-            if cached and len(cached[0]) >= int(min_rows):
+            if cached and cache_is_fresh_enough(cached[0], days, min_rows):
                 return cached[1]
         finally:
             if prev is None:
