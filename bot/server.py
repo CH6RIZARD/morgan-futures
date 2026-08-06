@@ -36,6 +36,7 @@ from .signals import (
     is_ny_open,
     is_london_pine,
     is_ny_pine,
+    is_asia_scalp_trade,
 )
 
 ET = ZoneInfo("America/New_York")
@@ -361,6 +362,7 @@ def _active_windows(now_et: datetime) -> bool:
         or is_ny_open(now_et)
         or is_london_pine(now_et)
         or is_ny_pine(now_et)
+        or is_asia_scalp_trade(now_et)
     )
 
 
@@ -619,15 +621,22 @@ def scanner_loop() -> None:
                 if not candles or len(candles) < 80:
                     continue
 
+                # Every detector sizes its sweep threshold off the contract's real
+                # tick, so `symbol` has to be passed — without it they fall back to
+                # a 1bp-of-price pseudo-tick, which is a fraction of a ZB tick and
+                # many times an NQ tick.
                 signals_by_type: dict[str, list] = {}
                 if is_london_kz(now_et) or is_ny_kz(now_et):
-                    signals_by_type["KZ"] = detect_kz_signals(candles) or []
+                    signals_by_type["KZ"] = detect_kz_signals(candles, symbol=sym) or []
                 if is_ny_open(now_et):
-                    signals_by_type["ORB"] = detect_orb_signals(candles) or []
+                    signals_by_type["ORB"] = detect_orb_signals(candles, symbol=sym) or []
                 if is_london_pine(now_et):
-                    signals_by_type["ASHL"] = detect_pine_ashl_signals(candles) or []
-                if is_ny_pine(now_et):
-                    signals_by_type["LRNY"] = detect_pine_lrny_signals(candles) or []
+                    signals_by_type["ASHL"] = detect_pine_ashl_signals(candles, symbol=sym) or []
+                # LRNY now carries the Asia scalp, which trades 00:00-05:00 ET.
+                # Gating it on the old 08:00-11:00 NY window meant it could never
+                # fire live — the detector's own window had already closed.
+                if is_asia_scalp_trade(now_et):
+                    signals_by_type["LRNY"] = detect_pine_lrny_signals(candles, symbol=sym) or []
 
                 new_sigs: list = []
                 for arr in signals_by_type.values():

@@ -835,16 +835,237 @@ def detect_pine_ashl_signals(candles, symbol=None):
     )
 
 
-def detect_pine_lrny_signals(candles, symbol=None):
-    """London range (03:00–06:00 NY) + NY trade window (08:00–11:00 NY), long only."""
-    return _detect_pine_long_only(
-        candles,
-        "LRNY",
-        is_london_pine,
-        is_ny_pine,
-        "LRNY",
-        symbol=symbol,
+# =====================
+# ASIA LIQUIDITY-TRAP SCALP  (ships under the "LRNY" key)
+# =====================
+# Port of the Pine v6 script the owner actually trades ("asia scalp short" —
+# it emits BOTH directions despite the title). This REPLACED the old
+# London-range / NY-trade long-only leg. The dict key stays "LRNY" because the
+# API and UI consume it; the strategy behind the key is what changed.
+#
+#   rangeSess 1800-0000 ET (Asia accumulation, crosses midnight, ends at 00:00)
+#   tradeSess 0000-0500 ET
+#   swingLen 5 (pivot lookback AND lookforward), minSweepTicks 3, EMA filter off.
+
+ASIA_SCALP_RANGE_SESSION = (18, 0, 0, 0)   # 1800-0000
+ASIA_SCALP_TRADE_SESSION = (0, 0, 5, 0)    # 0000-0500
+
+
+def is_asia_scalp_range(dt, session=ASIA_SCALP_RANGE_SESSION):
+    """Pine ``time in "1800-0000"`` — 18:00 up to but not including 00:00 ET."""
+    return in_range(dt, *session)
+
+
+def is_asia_scalp_trade(dt, session=ASIA_SCALP_TRADE_SESSION):
+    """Pine ``time in "0000-0500"`` — 00:00 up to but not including 05:00 ET."""
+    return in_range(dt, *session)
+
+
+def _pivot_high(candles, p: int, left: int, right: int) -> float | None:
+    """``ta.pivothigh(high, left, right)`` evaluated for candidate bar ``p``.
+
+    Strictly greater than every high in [p-left, p+right]. The caller is
+    responsible for only asking once bar ``p+right`` exists — that is the bar on
+    which Pine confirms the pivot, and the earliest a live chart could know it.
+    """
+    if p - left < 0 or p + right >= len(candles):
+        return None
+    hp = candles[p]["high"]
+    for j in range(p - left, p + right + 1):
+        if j != p and candles[j]["high"] >= hp:
+            return None
+    return hp
+
+
+def _pivot_low(candles, p: int, left: int, right: int) -> float | None:
+    """``ta.pivotlow(low, left, right)`` for candidate bar ``p`` (strict)."""
+    if p - left < 0 or p + right >= len(candles):
+        return None
+    lp = candles[p]["low"]
+    for j in range(p - left, p + right + 1):
+        if j != p and candles[j]["low"] <= lp:
+            return None
+    return lp
+
+
+def _ema_series(values, length: int):
+    """``ta.ema`` — na until ``length`` bars exist, seeded with the SMA."""
+    out: list[float | None] = [None] * len(values)
+    if length <= 0 or len(values) < length:
+        return out
+    alpha = 2.0 / (length + 1.0)
+    prev = sum(values[:length]) / length
+    out[length - 1] = prev
+    for i in range(length, len(values)):
+        prev = alpha * values[i] + (1.0 - alpha) * prev
+        out[i] = prev
+    return out
+
+
+def _env_int(name: str, default: int, lo: int, hi: int) -> int:
+    try:
+        return max(lo, min(int(os.environ.get(name, str(default))), hi))
+    except (TypeError, ValueError):
+        return default
+
+
+def detect_pine_asia_scalp_signals(
+    candles,
+    symbol=None,
+    signal_type: str = "LRNY",
+    swing_len: int | None = None,
+    min_sweep_ticks: int | None = None,
+    use_ema_filter: bool | None = None,
+    ema_len: int | None = None,
+    range_session=ASIA_SCALP_RANGE_SESSION,
+    trade_session=ASIA_SCALP_TRADE_SESSION,
+    sl_buffer_ticks: int | None = None,
+):
+    """Asia liquidity-trap scalp — long AND short. Faithful port of the Pine v6.
+
+    Entry/stop follow the same convention as every other leg in this module:
+    entry is the signal bar's close, the stop sits a tick buffer beyond the
+    sweep extreme (the signal bar's high for shorts, its low for longs), and the
+    target is derived by ``simulate_trade`` from the leg's RR. The Pine
+    indicator defines no exits, so nothing new is invented here.
+    """
+    signals: list[dict] = []
+    if not candles:
+        return signals
+
+    swing_len = _env_int("ASIA_SCALP_SWING_LEN", 5, 1, 50) if swing_len is None else int(swing_len)
+    min_sweep_ticks = (
+        _env_int("ASIA_SCALP_MIN_SWEEP_TICKS", 3, 0, 500)
+        if min_sweep_ticks is None else int(min_sweep_ticks)
     )
+    sl_buffer_ticks = (
+        _env_int("ASIA_SCALP_SL_BUFFER_TICKS", 2, 0, 500)
+        if sl_buffer_ticks is None else int(sl_buffer_ticks)
+    )
+    ema_len = _env_int("ASIA_SCALP_EMA_LEN", 50, 1, 1000) if ema_len is None else int(ema_len)
+    if use_ema_filter is None:
+        # Pine default is OFF. Opt-in only.
+        use_ema_filter = os.environ.get("ASIA_SCALP_USE_EMA", "0").strip().lower() in ("1", "true", "yes")
+
+    if len(candles) < swing_len * 2 + 2:
+        return signals
+
+    mintick = tick_size_for(symbol, candles)
+    if not mintick:
+        return signals
+    min_sweep = min_sweep_ticks * mintick
+    sl_buf = sl_buffer_ticks * mintick
+
+    ema = _ema_series([c["close"] for c in candles], ema_len) if use_ema_filter else [None] * len(candles)
+
+    sess_high = sess_low = None      # range the LIVE 18:00-00:00 session is building
+    last_high = last_low = None      # frozen when that session ENDS (at 00:00)
+    last_ph = last_pl = None         # persist across days until replaced
+    prev_in_range = False
+
+    for i, c in enumerate(candles):
+        dt = candle_dt(c)
+        in_rng = is_asia_scalp_range(dt, range_session)
+        in_trade = is_asia_scalp_trade(dt, trade_session)
+
+        # --- Asia range: reset on the session's FIRST bar, not on the calendar
+        # date. 18:00-00:00 crosses midnight; a date-keyed reset would throw
+        # away every bar before 00:00 and freeze a range built from nothing.
+        if in_rng and not prev_in_range:
+            sess_high, sess_low = c["high"], c["low"]
+        elif in_rng:
+            sess_high = max(sess_high, c["high"])
+            sess_low = min(sess_low, c["low"])
+
+        # Freeze the levels the moment the range session ends (00:00), which is
+        # the same instant the trade session opens.
+        if (not in_rng) and prev_in_range:
+            last_high, last_low = sess_high, sess_low
+
+        prev_in_range = in_rng
+
+        # --- Pivots. ta.pivothigh(high, N, N) is confirmed N bars AFTER the
+        # pivot bar, so bar i can only ever learn about bar i-N. Reading the
+        # pivot any earlier is lookahead.
+        p = i - swing_len
+        if p >= 0:
+            ph = _pivot_high(candles, p, swing_len, swing_len)
+            if ph is not None:
+                last_ph = ph
+            pl = _pivot_low(candles, p, swing_len, swing_len)
+            if pl is not None:
+                last_pl = pl
+
+        if not in_trade:
+            continue
+
+        close, open_ = c["close"], c["open"]
+        bullish = close > open_
+        bearish = close < open_
+        e = ema[i]
+        ema_short_ok = (not use_ema_filter) or (e is not None and close < e)
+        ema_long_ok = (not use_ema_filter) or (e is not None and close > e)
+
+        rng = (last_high - last_low) if (last_high is not None and last_low is not None) else None
+
+        # SHORT
+        sweep_up = last_ph is not None and c["high"] > last_ph + min_sweep
+        reject_down = last_ph is not None and close < last_ph
+        # NOTE: premium is measured UP from lastLow — lastLow + 0.6*range — which
+        # is what the Pine says. It is not lastHigh - 0.4*range.
+        in_premium = rng is not None and close > (last_low + 0.6 * rng)
+        if ema_short_ok and sweep_up and reject_down and bearish and in_premium:
+            sl = c["high"] + sl_buf
+            signals.append({
+                "type": signal_type,
+                "direction": "SELL",
+                "bar_index": i,
+                "entry": close,
+                "stop_loss": round(sl, 8),
+                "time": c["time"],
+                "dt": dt.isoformat(),
+                "session": "ASIA_SCALP",
+                "lookback": swing_len,
+                "trading_day": pine_trading_day_id(dt),
+                "asia_high": last_high,
+                "asia_low": last_low,
+                "swept_level": last_ph,
+            })
+
+        # LONG
+        sweep_down = last_pl is not None and c["low"] < last_pl - min_sweep
+        reject_up = last_pl is not None and close > last_pl
+        in_discount = rng is not None and close < (last_low + 0.4 * rng)
+        if ema_long_ok and sweep_down and reject_up and bullish and in_discount:
+            sl = c["low"] - sl_buf
+            signals.append({
+                "type": signal_type,
+                "direction": "BUY",
+                "bar_index": i,
+                "entry": close,
+                "stop_loss": round(sl, 8),
+                "time": c["time"],
+                "dt": dt.isoformat(),
+                "session": "ASIA_SCALP",
+                "lookback": swing_len,
+                "trading_day": pine_trading_day_id(dt),
+                "asia_high": last_high,
+                "asia_low": last_low,
+                "swept_level": last_pl,
+            })
+
+    signals.sort(key=lambda s: s["bar_index"])
+    return signals
+
+
+def detect_pine_lrny_signals(candles, symbol=None, **kwargs):
+    """The "LRNY" leg — now the Asia liquidity-trap scalp (18:00-00:00 range,
+    00:00-05:00 ET trade window, both directions).
+
+    The old London-range/NY-window long-only strategy this key used to hold is
+    no longer traded; the key name is preserved because the API and UI consume it.
+    """
+    return detect_pine_asia_scalp_signals(candles, symbol=symbol, signal_type="LRNY", **kwargs)
 
 
 # =====================
