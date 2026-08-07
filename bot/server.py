@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, redirect, request, send_from_directory
 import requests
 
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -94,7 +94,6 @@ _live_override: bool | None = None
 def _is_live_enabled() -> bool:
     return _live_override if _live_override is not None else LIVE_TRADING_ENABLED
 
-DASHBOARD_DIR = os.path.join(os.path.dirname(__file__), "..", "dashboard")
 
 SCAN_INTERVAL_SEC = float(os.environ.get("SCAN_INTERVAL_SEC", "60"))
 STALE_WINDOW_SEC = int(os.environ.get("SIGNAL_STALE_WINDOW_SEC", "300"))
@@ -724,11 +723,10 @@ def _lazy_start_background() -> None:
 
 
 @app.route("/")
-def dashboard():
-    # Ensure dashboard updates propagate immediately (Railway/CDN + browser can cache aggressively).
-    resp = send_from_directory(DASHBOARD_DIR, "index.html", max_age=0)
-    resp.headers["Cache-Control"] = "no-store, max-age=0"
-    return resp
+def root():
+    # The standalone operator dashboard is gone — deleted, not hidden. The app
+    # is the only UI this service serves; the JSON API under /api is untouched.
+    return redirect("/app/", code=302)
 
 
 # ── Mobile app, web build ──────────────────────────────────────────────────
