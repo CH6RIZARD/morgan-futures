@@ -737,9 +737,31 @@ def _detect_pine_long_only(
     swing_lb = max(2, min(int(os.environ.get("PINE_SWING_LOOKBACK", "8")), 50))
     min_sweep_ticks = max(0, int(os.environ.get("PINE_MIN_SWEEP_TICKS", "2")))
     sl_buf_ticks = max(0, int(os.environ.get("PINE_SL_BUFFER_TICKS", "2")))
-    max_min_after = max(5, min(int(os.environ.get("PINE_MAX_MINUTES_AFTER", "120")), 600))
+    # The trade window is the SESSION — nothing else.
+    #
+    # This used to carry a hard-coded 120-minute clock started at the first bar
+    # of the trade window, on top of the session predicate. ASHL's trade window
+    # is ``is_london_pine`` = 03:00-06:00 ET (180 minutes), which is what this
+    # detector's own docstring says, what the TradingView preset that
+    # ``is_london_pine`` documents says, and what the live scanner gates on
+    # (``bot/server.py`` runs ``detect_pine_ashl_signals`` for as long as
+    # ``is_london_pine(now_et)``). The 120-minute constant silently overrode all
+    # three and discarded the last third of every session: 11 of every 36 London
+    # bars, 451 bars per symbol over a 60-day window. The scanner spent 05:00-06:00
+    # ET every day calling a detector that had already decided it would not
+    # answer. Two gates encoded the same concept and disagreed; the undocumented
+    # magic number lost.
+    #
+    # ``PINE_MAX_MINUTES_AFTER`` still works if it is explicitly set, so an
+    # operator who wants a shorter entry window can still have one. Unset means
+    # "the whole session", not "120 minutes".
+    _mma_env = os.environ.get("PINE_MAX_MINUTES_AFTER", "").strip()
+    max_min_after = max(5, min(int(_mma_env), 600)) if _mma_env else None
     interval = int(OHLC_INTERVAL_MINUTES)
-    max_bars_after = max(1, (max_min_after + interval - 1) // interval)
+    max_bars_after = (
+        max(1, (max_min_after + interval - 1) // interval)
+        if max_min_after is not None else None
+    )
 
     mintick = tick_size_for(symbol, candles)
     sweep_thresh = min_sweep_ticks * mintick
@@ -782,9 +804,11 @@ def _detect_pine_long_only(
 
         allow = False
         if in_trade and win_start_ts is not None and win_start_bar_idx is not None:
-            elapsed_min = (c["time"] - win_start_ts) / 60.0
-            bars_after = i - win_start_bar_idx
-            allow = elapsed_min <= max_min_after and bars_after <= max_bars_after
+            allow = True
+            if max_min_after is not None:
+                elapsed_min = (c["time"] - win_start_ts) / 60.0
+                bars_after = i - win_start_bar_idx
+                allow = elapsed_min <= max_min_after and bars_after <= max_bars_after
 
         if allow and ref_low is not None:
             if c["low"] < (ref_low - sweep_thresh):
@@ -1359,6 +1383,28 @@ def detect_kz_signals(candles, atr_mult=0.20, sl_atr_mult=0.10, min_sweep_ticks=
 
 def detect_orb_signals(candles, min_sweep_ticks=2, sl_buffer_ticks=2, max_bars_after_open=90,
                        symbol=None):
+    """London range (02:00-05:00 ET) swept during the NY open window, both directions.
+
+    Two limits in here were measured against 60 days of live 5m futures data
+    (13 symbols, ~11.4k bars each) rather than assumed:
+
+    * ``max_bars_after_open=90`` is unreachable. ``is_ny_open`` is 09:30-12:00,
+      which is 30 five-minute bars, so ``ny_bar_count`` tops out at 29 and the
+      gate discarded exactly 0 bars on every symbol. It is inert, not a filter.
+    * ``signaled_today`` is a genuine one-signal-per-calendar-day cap and it does
+      bind: over the same window it suppressed 44 already-qualified signals
+      across the universe (ES 35->28, NQ 26->20, RTY 29->23; CL only 9->8).
+      18 of those 44 were the OPPOSITE direction to the day's first signal —
+      i.e. a fade of the London high blocked by an earlier fade of the London
+      low, two different setups against two different levels. ``detect_kz_signals``,
+      which is the same sweep/MSS/reclaim/volume machine, carries no such cap.
+      This is left AS IS because it is a plausible risk rule and nothing in the
+      repo contradicts it; it is documented here so the count is explainable.
+
+    The dominant reason this leg is selective is neither: on CL 35 of 41 days
+    sweep the London range but only 10 ever produce a close beyond the trailing
+    swing (803 bar-level MSS rejections). That part is market structure.
+    """
     signals = []
     if len(candles) < 30:
         return signals

@@ -273,3 +273,69 @@ class TestExpectancyIsRealized(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestAshlTradesItsWholeDeclaredWindow(unittest.TestCase):
+    """ASHL's trade window is the session, and nothing narrower.
+
+    ``detect_pine_ashl_signals`` documents its trade window as London
+    03:00-06:00 ET, ``is_london_pine`` implements exactly that, and the live
+    scanner in ``bot/server.py`` calls the detector for as long as
+    ``is_london_pine(now_et)`` is true. A hard-coded 120-minute clock inside
+    ``_detect_pine_long_only`` silently shortened that to 03:00-05:00, so the
+    scanner spent the 05:00-06:00 hour of every session polling a detector that
+    could no longer answer. On 60 days of live 5m futures data that hour is the
+    single most productive one in the window (40 of 113 ASHL signals across the
+    13-symbol universe).
+    """
+
+    def _series(self, setup_hour, setup_minute):
+        """Asia builds a range 19:00-03:00; the sweep+reclaim happens once, at
+        the requested time inside the London window."""
+        bars = _flat_series(datetime(2026, 7, 7, 18, 0, tzinfo=ET), 170,
+                            price=100.0, spread=0.2)
+        by_t = {b["time"]: b for b in bars}
+        sweep_t = _ts(2026, 7, 8, setup_hour, setup_minute)
+        mss_t = sweep_t + 300
+        self.assertIn(sweep_t, by_t)
+        self.assertIn(mss_t, by_t)
+        # Sweep the Asia low, then close back above it and above the trailing
+        # swing high on the next bar.
+        by_t[sweep_t].update(low=90.0, close=95.0)
+        by_t[mss_t].update(high=110.0, close=105.0, volume=5000.0)
+        return bars
+
+    def test_setup_inside_the_first_two_hours_fires(self):
+        sigs = S.detect_pine_ashl_signals(self._series(3, 30), symbol="ES=F")
+        self.assertEqual(len(sigs), 1, "03:30 setup did not fire at all")
+
+    def test_setup_in_the_final_hour_of_the_window_fires(self):
+        bars = self._series(5, 5)
+        sigs = S.detect_pine_ashl_signals(bars, symbol="ES=F")
+        self.assertEqual(
+            len(sigs), 1,
+            "a valid ASHL setup at 05:10 ET was discarded: the detector's trade "
+            "window is 03:00-06:00, which is also what the live scanner gates on",
+        )
+        self.assertEqual(
+            S.candle_dt({"time": sigs[0]["time"]}).hour, 5,
+            "signal did not come from the final hour of the London window",
+        )
+
+    def test_setup_after_the_window_closes_still_does_not_fire(self):
+        # 06:05 ET is outside is_london_pine — removing the minute clock must
+        # not extend the session itself.
+        sigs = S.detect_pine_ashl_signals(self._series(6, 5), symbol="ES=F")
+        self.assertEqual(sigs, [], "traded outside the London window")
+
+    def test_explicit_env_cutoff_is_still_honoured(self):
+        import os
+        bars = self._series(5, 5)
+        os.environ["PINE_MAX_MINUTES_AFTER"] = "120"
+        try:
+            self.assertEqual(
+                S.detect_pine_ashl_signals(bars, symbol="ES=F"), [],
+                "an explicitly configured entry cutoff was ignored",
+            )
+        finally:
+            os.environ.pop("PINE_MAX_MINUTES_AFTER", None)
